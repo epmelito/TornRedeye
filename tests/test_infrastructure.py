@@ -92,7 +92,7 @@ class InfrastructureTests(unittest.TestCase):
         self.assertEqual(set(parameter["AllowedValues"]), {"DISABLED", "ENABLED"})
         schedule = properties("CollectionSchedule")
         self.assertEqual(schedule["State"], {"Ref": "ScheduleState"})
-        self.assertEqual(schedule["ScheduleExpression"], "rate(5 minutes)")
+        self.assertEqual(schedule["ScheduleExpression"], "rate(1 minute)")
         self.assertEqual(schedule["FlexibleTimeWindow"], {"Mode": "OFF"})
         self.assertEqual(schedule["GroupName"], {"Ref": "CollectionScheduleGroup"})
         self.assertEqual(schedule["Target"]["Arn"], {"Fn::GetAtt": ["CollectorFunction", "Arn"]})

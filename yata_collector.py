@@ -13,7 +13,7 @@ import json
 import math
 from typing import Literal
 from urllib.error import HTTPError, URLError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 
 SOURCE_URL = "https://yata.yt/api/v1/travel/export/"
@@ -156,8 +156,13 @@ def collect(timeout: float = 15.0) -> CollectionResult:
         raise ValueError("timeout must be a finite positive number")
     raw_response = None
     http_status = None
+    request = Request(
+        SOURCE_URL,
+        headers={"User-Agent": "TornRedeye/0.1", "Accept": "application/json"},
+        method="GET",
+    )
     try:
-        with urlopen(SOURCE_URL, timeout=timeout) as response:
+        with urlopen(request, timeout=timeout) as response:
             http_status = response.status
             raw_response = response.read()
     except HTTPError as error:

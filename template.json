@@ -259,7 +259,7 @@
         "GroupName": {
           "Ref": "CollectionScheduleGroup"
         },
-        "ScheduleExpression": "rate(5 minutes)",
+        "ScheduleExpression": "rate(1 minute)",
         "FlexibleTimeWindow": {
           "Mode": "OFF"
         },

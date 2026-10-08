@@ -202,13 +202,27 @@ class CollectTests(unittest.TestCase):
         self.response.read.return_value = encode(PAYLOAD)
         self.urlopen.return_value.__enter__.return_value = self.response
 
-    def test_success_uses_fixed_endpoint_timeout_and_closes_response(self):
+    def test_success_uses_identified_get_request_timeout_and_closes_response(self):
         result = collector.collect(timeout=5)
         self.assertEqual(result.status, "observed")
         self.assertEqual(result.retrieved_at, NOW)
-        self.urlopen.assert_called_once_with(collector.SOURCE_URL, timeout=5)
+        self.urlopen.assert_called_once()
+        request = self.urlopen.call_args.args[0]
+        self.assertEqual(request.full_url, "https://yata.yt/api/v1/travel/export/")
+        self.assertEqual(request.get_method(), "GET")
+        self.assertIsNone(request.data)
+        self.assertEqual(
+            {name.lower(): value for name, value in request.header_items()},
+            {"user-agent": "TornRedeye/0.1", "accept": "application/json"},
+        )
+        self.assertEqual(self.urlopen.call_args.kwargs, {"timeout": 5})
         self.clock.now.assert_called_once_with(timezone.utc)
         self.urlopen.return_value.__exit__.assert_called_once()
+
+    def test_default_timeout_remains_fifteen_seconds(self):
+        collector.collect()
+        self.urlopen.assert_called_once()
+        self.assertEqual(self.urlopen.call_args.kwargs, {"timeout": 15.0})
 
     def test_malformed_success_retains_body(self):
         self.response.read.return_value = b'{"stocks":'
