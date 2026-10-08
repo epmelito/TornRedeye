@@ -31,8 +31,9 @@ SAM/CloudFormation schema validation or a deployed smoke test. Local tests do
 not execute the Python 3.13 Lambda runtime or its SDK.
 
 When deployment is separately authorized, use an existing AWS identity with
-stack deployment and IAM role creation/pass permissions. Check Lambda reserved
-concurrency quota availability first. This command creates AWS resources and
+stack deployment and IAM role creation/pass permissions. The verified regional
+Lambda concurrency quota is 10; the approved configuration does not reserve
+concurrency or require a quota increase. This command creates AWS resources and
 uploads code to a SAM-managed artifact bucket; it is not an offline check.
 It prompts for review of the change set and leaves the schedule disabled.
 
@@ -63,8 +64,12 @@ parameter reuse. Avoid direct Scheduler edits that create CloudFormation drift.
 When enabled, Scheduler delivers every five minutes with flexible windows off, at most one
 delivery retry, and a 60-second delivery-age limit. It invokes Lambda
 asynchronously: delivery success is not collection or persistence success.
-Lambda has a 120-second timeout, 128 MiB memory, reserved concurrency 1, zero
-function-error retries, and a 60-second async event-age limit. Throttling/system
+Lambda has a 120-second timeout, 128 MiB memory, zero function-error retries,
+and a 60-second async event-age limit. Concurrency is not explicitly reserved;
+the function shares the regional unreserved concurrency pool with other functions.
+Overlapping invocations are possible, including manual invocations and duplicate
+deliveries. Each retains its own retrieval UUID and evidence; execution is not
+serialized. Shared concurrency exhaustion can cause throttling. Throttling/system
 errors may still be retried within that age limit. SDK retries and duplicate
 service delivery remain possible; every actual handler invocation is a new
 retrieval UUID. These settings do not reconstruct an earlier in-memory result.
@@ -89,4 +94,4 @@ in 30 days, usually writing two objects each time. Costs depend on Lambda time,
 S3 request/data volume, logs, retries, and any retained or deployment artifact
 buckets. Normalized history grows without expiry. Disabled scheduling prevents
 scheduled invocations, but retained data and deployment artifacts can still cost
-money. No account pricing or live quota verification has been performed.
+money. No account pricing verification has been performed.

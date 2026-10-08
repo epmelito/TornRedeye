@@ -163,7 +163,6 @@
         ],
         "MemorySize": 128,
         "Timeout": 120,
-        "ReservedConcurrentExecutions": 1,
         "Role": {
           "Fn::GetAtt": [
             "CollectorRole",

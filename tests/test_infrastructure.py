@@ -72,7 +72,7 @@ class InfrastructureTests(unittest.TestCase):
         self.assertEqual(function["Runtime"], "python3.13")
         self.assertGreater(function["Timeout"], 15)
         self.assertLess(function["Timeout"], 300)
-        self.assertEqual(function["ReservedConcurrentExecutions"], 1)
+        self.assertNotIn("ReservedConcurrentExecutions", function)
         self.assertEqual(function["Environment"]["Variables"], {
             "DESTINATION_BUCKET": {"Ref": "EvidenceBucket"}, "YATA_TIMEOUT_SECONDS": "15",
         })
