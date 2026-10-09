@@ -5,6 +5,7 @@ import math
 import os
 from uuid import uuid4
 
+from polling_guard import PollingGuard
 from s3_persistence import persist
 from yata_collector import collect
 
@@ -43,9 +44,9 @@ def _s3_client(region):
 def lambda_handler(event, context):
     """Collect once, persist all outcomes, then signal source/storage failures.
 
-    Event contents do not configure storage or identity. Each invocation makes
-    a new retrieval, including redelivery of the same event. Storage retries
-    for the original evidence still require its original UUID and result.
+    Event contents do not configure storage or identity. Only eligible invocations
+    retrieve; each actual retrieval has a new UUID, including eligible redelivery.
+    Storage retries for original evidence require its original UUID and result.
     """
     collection_id = uuid4()
     request_id = getattr(context, "aws_request_id", None)
@@ -54,6 +55,14 @@ def lambda_handler(event, context):
         bucket, timeout, region = _configuration()
         stage = "client_initialization"
         s3 = _s3_client(region)
+        stage = "control_acquisition"
+        guard = PollingGuard(s3=s3, bucket=bucket)
+        reason = guard.acquire(
+            collection_id, remaining_millis=getattr(context, "get_remaining_time_in_millis", None),
+        )
+        if reason is not None:
+            logger.warning("collection skipped request_id=%s reason=%s", request_id, reason)
+            return {"status": "skipped", "reason": reason}
         stage = "collection"
         result = collect(timeout=timeout)
         logger.info(
@@ -62,6 +71,13 @@ def lambda_handler(event, context):
             collection_id, request_id, result.status, result.retrieved_at.isoformat(),
             result.source_timestamp, result.export_timestamp, result.http_status, result.detail,
         )
+        stage = "control_policy"
+        control_error = None
+        try:
+            guard.record_outcome(result)
+        except Exception as error:
+            control_error = error
+            logger.exception("control policy failed collection_id=%s; preserving evidence", collection_id)
         stage = "persistence"
         receipt = persist(result, s3=s3, bucket=bucket, collection_id=collection_id)
         logger.info(
@@ -70,6 +86,11 @@ def lambda_handler(event, context):
             collection_id, receipt.raw_key, receipt.normalized_key,
             receipt.raw_state, receipt.normalized_state,
         )
+        if control_error is not None:
+            stage = "control_policy"
+            raise control_error
+        stage = "control_release"
+        guard.finish()
         if result.status in ("collection_failed", "malformed"):
             stage = "collection_outcome"
             raise CollectionError(

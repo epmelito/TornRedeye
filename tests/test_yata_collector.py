@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
+from email.message import Message
 from http.client import BadStatusLine, IncompleteRead
 from io import BytesIO
 import json
@@ -223,6 +224,56 @@ class CollectTests(unittest.TestCase):
         collector.collect()
         self.urlopen.assert_called_once()
         self.assertEqual(self.urlopen.call_args.kwargs, {"timeout": 15.0})
+
+    def test_retry_after_delay_and_http_date_are_retained_and_parsed(self):
+        cases = (
+            ("120", "2026-10-08T12:02:00Z"),
+            ("0", "2026-10-08T12:00:00Z"),
+            ("00120", "2026-10-08T12:02:00Z"),
+            ("Thu, 08 Oct 2026 12:02:00 GMT", "2026-10-08T12:02:00Z"),
+            ("Thursday, 08-Oct-26 12:02:00 GMT", "2026-10-08T12:02:00Z"),
+            ("Thu Oct  8 12:02:00 2026", "2026-10-08T12:02:00Z"),
+            ("Thu, 08 Oct 2026 11:00:00 GMT", "2026-10-08T12:00:00Z"),
+        )
+        for value, expected in cases:
+            with self.subTest(value=value):
+                headers = Message()
+                headers["Retry-After"] = value
+                headers["X-Unrelated"] = "ignored"
+                self.urlopen.side_effect = HTTPError(collector.SOURCE_URL, 429, "limited", headers, BytesIO(b"limit"))
+                result = collector.collect()
+                self.assertEqual(result.status, "collection_failed")
+                self.assertEqual(result.http_status, 429)
+                self.assertEqual(result.raw_response, b"limit")
+                self.assertEqual(result.response_headers, (("Retry-After", value),))
+                self.assertEqual(result.retry_after_at, expected)
+                self.assertIsNone(result.retry_after_error)
+
+    def test_retry_after_missing_invalid_duplicate_and_date_clock_skew(self):
+        for value in ("", "-1", "1.5", "NaN", "tomorrow", "2026-10-08T12:00:00Z", "9" * 100):
+            with self.subTest(value=value):
+                self.urlopen.side_effect = HTTPError(collector.SOURCE_URL, 429, "limited", {"Retry-After": value}, BytesIO(b"limit"))
+                result = collector.collect()
+                self.assertIsNone(result.retry_after_at)
+                self.assertTrue(result.retry_after_error)
+        headers = Message()
+        headers["Retry-After"] = "1"
+        headers["Retry-After"] = "2"
+        self.urlopen.side_effect = HTTPError(collector.SOURCE_URL, 429, "limited", headers, BytesIO())
+        self.assertIn("ambiguous", collector.collect().retry_after_error)
+        self.urlopen.side_effect = HTTPError(collector.SOURCE_URL, 429, "limited", {}, BytesIO())
+        self.assertIsNone(collector.collect().retry_after_at)
+        headers = {"Retry-After": "Thu, 08 Oct 2026 12:02:00 GMT", "Date": "Thu, 08 Oct 2026 11:00:00 GMT"}
+        self.urlopen.side_effect = HTTPError(collector.SOURCE_URL, 503, "unavailable", headers, BytesIO())
+        self.assertEqual(collector.collect().retry_after_at, "2026-10-08T13:02:00Z")
+
+    def test_headers_survive_error_body_read_failure(self):
+        body = MagicMock()
+        body.read.side_effect = IncompleteRead(b"partial", 10)
+        self.urlopen.side_effect = HTTPError(collector.SOURCE_URL, 429, "limited", {"Retry-After": "120"}, body)
+        result = collector.collect()
+        self.assertEqual(result.raw_response, b"partial")
+        self.assertEqual(result.retry_after_at, "2026-10-08T12:02:00Z")
 
     def test_malformed_success_retains_body(self):
         self.response.read.return_value = b'{"stocks":'

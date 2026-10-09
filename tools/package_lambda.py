@@ -1,4 +1,4 @@
-"""Build the SAM CodeUri ZIP from the three required application modules only."""
+"""Build the SAM CodeUri ZIP from the required application modules only."""
 
 from pathlib import Path
 import tempfile
@@ -6,7 +6,7 @@ from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MODULES = ("lambda_function.py", "s3_persistence.py", "yata_collector.py")
+MODULES = ("lambda_function.py", "s3_persistence.py", "yata_collector.py", "polling_guard.py")
 ARTIFACT = ROOT / ".aws-sam" / "collector.zip"
 
 

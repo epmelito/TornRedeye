@@ -12,6 +12,7 @@ from uuid import UUID
 from datetime import datetime, timezone
 from zipfile import ZipFile
 
+from polling_guard import CONTROL_KEY, LEASE_SECONDS
 from s3_persistence import persist
 from yata_collector import normalize
 from tools import package_lambda
@@ -66,12 +67,27 @@ class InfrastructureTests(unittest.TestCase):
         self.assertEqual(actions, {"s3:PutObject", "s3:GetObject", "logs:CreateLogStream", "logs:PutLogEvents"})
         self.assertTrue(all(statement["Effect"] == "Allow" for statement in statements))
 
+    def test_control_permissions_are_conditional_and_scoped_to_exact_key(self):
+        statements = properties("CollectorRole")["Policies"][0]["PolicyDocument"]["Statement"]
+        control = [s for s in statements if s["Sid"] in ("ReadPollingControl", "UpdatePollingControl")]
+        self.assertEqual(len(control), 2)
+        for statement in control:
+            self.assertEqual(statement["Resource"], {"Fn::Sub": "${EvidenceBucket.Arn}/" + CONTROL_KEY})
+        read = next(s for s in control if s["Sid"] == "ReadPollingControl")
+        write = next(s for s in control if s["Sid"] == "UpdatePollingControl")
+        self.assertEqual(read["Action"], ["s3:GetObject"])
+        self.assertEqual(write["Action"], ["s3:PutObject"])
+        self.assertEqual(write["Condition"], {"Null": {"s3:if-match": "false"}})
+        rules = properties("EvidenceBucket")["LifecycleConfiguration"]["Rules"]
+        self.assertFalse(any(CONTROL_KEY.startswith(rule["Prefix"]) for rule in rules))
+
     def test_lambda_uses_handler_configuration_bounded_execution_and_existing_log_group(self):
         function = properties("CollectorFunction")
         self.assertEqual(function["Handler"], "lambda_function.lambda_handler")
         self.assertEqual(function["Runtime"], "python3.13")
         self.assertGreater(function["Timeout"], 15)
         self.assertLess(function["Timeout"], 300)
+        self.assertGreater(LEASE_SECONDS, function["Timeout"])
         self.assertNotIn("ReservedConcurrentExecutions", function)
         self.assertEqual(function["Environment"]["Variables"], {
             "DESTINATION_BUCKET": {"Ref": "EvidenceBucket"}, "YATA_TIMEOUT_SECONDS": "15",
@@ -130,16 +146,16 @@ class PackageTests(unittest.TestCase):
             package_lambda.package(destination)
             with ZipFile(destination) as archive:
                 self.assertEqual(set(archive.namelist()), {
-                    "lambda_function.py", "s3_persistence.py", "yata_collector.py",
+                    "lambda_function.py", "s3_persistence.py", "yata_collector.py", "polling_guard.py",
                 })
                 self.assertIsNone(archive.testzip())
                 for name in archive.namelist():
                     self.assertEqual(archive.read(name), (ROOT / name).read_bytes())
             code = (
                 "import sys; sys.path.insert(0, sys.argv[1]); "
-                "import lambda_function, s3_persistence, yata_collector; "
+                "import lambda_function, s3_persistence, yata_collector, polling_guard; "
                 "assert all(m.__file__.startswith(sys.argv[1]) "
-                "for m in (lambda_function, s3_persistence, yata_collector))"
+                "for m in (lambda_function, s3_persistence, yata_collector, polling_guard))"
             )
             checked = subprocess.run(
                 [sys.executable, "-I", "-B", "-c", code, str(destination)],

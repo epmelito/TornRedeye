@@ -145,6 +145,31 @@
                   "Resource": {
                     "Fn::Sub": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${CollectorLogGroup}:log-stream:*"
                   }
+                },
+                {
+                  "Sid": "ReadPollingControl",
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "${EvidenceBucket.Arn}/control/yata/jap/206/polling.json"
+                  }
+                },
+                {
+                  "Sid": "UpdatePollingControl",
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:PutObject"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "${EvidenceBucket.Arn}/control/yata/jap/206/polling.json"
+                  },
+                  "Condition": {
+                    "Null": {
+                      "s3:if-match": "false"
+                    }
+                  }
                 }
               ]
             }

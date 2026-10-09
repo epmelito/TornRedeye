@@ -37,6 +37,9 @@ class HandlerTests(unittest.TestCase):
         self.client_factory = self.start_patch(patch(
             "lambda_function._s3_client", return_value=self.s3,
         ))
+        self.guard_factory = self.start_patch(patch("lambda_function.PollingGuard"))
+        self.guard = self.guard_factory.return_value
+        self.guard.acquire.return_value = None
         self.result = normalize(RAW, NOW)
         self.collect = self.start_patch(patch("lambda_function.collect", return_value=self.result))
         self.persist = self.start_patch(patch("lambda_function.persist", return_value=PersistenceReceipt(
@@ -49,6 +52,9 @@ class HandlerTests(unittest.TestCase):
         with self.assertLogs("lambda_function", level="INFO") as logs:
             summary = handler.lambda_handler({}, self.context)
         self.collect.assert_called_once_with(timeout=15.0)
+        self.guard.acquire.assert_called_once_with(RUN_ID, remaining_millis=None)
+        self.guard.record_outcome.assert_called_once_with(self.result)
+        self.guard.finish.assert_called_once_with()
         self.client_factory.assert_called_once_with("eu-north-1")
         self.uuid.assert_called_once_with()
         self.persist.assert_called_once_with(
