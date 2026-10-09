@@ -1,0 +1,343 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Transform": "AWS::Serverless-2016-10-31",
+  "Description": "Torn Redeye YATA Japan Xanax collector; deploy only in eu-north-1",
+  "Parameters": {
+    "ScheduleState": {
+      "Type": "String",
+      "Default": "DISABLED",
+      "AllowedValues": [
+        "DISABLED",
+        "ENABLED"
+      ],
+      "Description": "Keep disabled until manual collection and persistence are verified"
+    }
+  },
+  "Rules": {
+    "StockholmOnly": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Equals": [
+              {
+                "Ref": "AWS::Region"
+              },
+              "eu-north-1"
+            ]
+          },
+          "AssertDescription": "This work package is approved only for eu-north-1"
+        }
+      ]
+    }
+  },
+  "Resources": {
+    "EvidenceBucket": {
+      "Type": "AWS::S3::Bucket",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        },
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerEnforced"
+            }
+          ]
+        },
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        },
+        "LifecycleConfiguration": {
+          "Rules": [
+            {
+              "Id": "ExpireRawEvidence",
+              "Status": "Enabled",
+              "Prefix": "raw/yata/jap/206/",
+              "ExpirationInDays": 60
+            }
+          ]
+        }
+      }
+    },
+    "CollectorLogGroup": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/tornredeye/${AWS::StackName}/collector"
+        },
+        "RetentionInDays": 14
+      }
+    },
+    "CollectorRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "CollectorEvidenceAndLogs",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Sid": "ConditionalEvidenceWrites",
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:PutObject"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Sub": "${EvidenceBucket.Arn}/raw/yata/jap/206/*"
+                    },
+                    {
+                      "Fn::Sub": "${EvidenceBucket.Arn}/normalized/yata/jap/206/*"
+                    }
+                  ],
+                  "Condition": {
+                    "StringEquals": {
+                      "s3:if-none-match": "*"
+                    }
+                  }
+                },
+                {
+                  "Sid": "CompareExistingEvidence",
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Sub": "${EvidenceBucket.Arn}/raw/yata/jap/206/*"
+                    },
+                    {
+                      "Fn::Sub": "${EvidenceBucket.Arn}/normalized/yata/jap/206/*"
+                    }
+                  ]
+                },
+                {
+                  "Sid": "WriteCollectorLogs",
+                  "Effect": "Allow",
+                  "Action": [
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${CollectorLogGroup}:log-stream:*"
+                  }
+                },
+                {
+                  "Sid": "ReadPollingControl",
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "${EvidenceBucket.Arn}/control/yata/jap/206/polling.json"
+                  }
+                },
+                {
+                  "Sid": "UpdatePollingControl",
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:PutObject"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "${EvidenceBucket.Arn}/control/yata/jap/206/polling.json"
+                  },
+                  "Condition": {
+                    "Null": {
+                      "s3:if-match": "false"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "CollectorFunction": {
+      "Type": "AWS::Serverless::Function",
+      "Properties": {
+        "CodeUri": ".aws-sam/collector.zip",
+        "Handler": "lambda_function.lambda_handler",
+        "Runtime": "python3.13",
+        "Architectures": [
+          "x86_64"
+        ],
+        "MemorySize": 128,
+        "Timeout": 120,
+        "Role": {
+          "Fn::GetAtt": [
+            "CollectorRole",
+            "Arn"
+          ]
+        },
+        "LoggingConfig": {
+          "LogGroup": {
+            "Ref": "CollectorLogGroup"
+          }
+        },
+        "Environment": {
+          "Variables": {
+            "DESTINATION_BUCKET": {
+              "Ref": "EvidenceBucket"
+            },
+            "YATA_TIMEOUT_SECONDS": "15"
+          }
+        }
+      }
+    },
+    "CollectorAsyncConfiguration": {
+      "Type": "AWS::Lambda::EventInvokeConfig",
+      "Properties": {
+        "FunctionName": {
+          "Ref": "CollectorFunction"
+        },
+        "Qualifier": "$LATEST",
+        "MaximumEventAgeInSeconds": 60,
+        "MaximumRetryAttempts": 0
+      }
+    },
+    "CollectionScheduleGroup": {
+      "Type": "AWS::Scheduler::ScheduleGroup"
+    },
+    "SchedulerRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "scheduler.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "StringEquals": {
+                  "aws:SourceAccount": {
+                    "Ref": "AWS::AccountId"
+                  },
+                  "aws:SourceArn": {
+                    "Fn::GetAtt": [
+                      "CollectionScheduleGroup",
+                      "Arn"
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "InvokeCollectorOnly",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "lambda:InvokeFunction"
+                  ],
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "CollectorFunction",
+                      "Arn"
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "CollectionSchedule": {
+      "Type": "AWS::Scheduler::Schedule",
+      "DependsOn": [
+        "CollectorAsyncConfiguration"
+      ],
+      "Properties": {
+        "GroupName": {
+          "Ref": "CollectionScheduleGroup"
+        },
+        "ScheduleExpression": "rate(1 minute)",
+        "FlexibleTimeWindow": {
+          "Mode": "OFF"
+        },
+        "State": {
+          "Ref": "ScheduleState"
+        },
+        "Target": {
+          "Arn": {
+            "Fn::GetAtt": [
+              "CollectorFunction",
+              "Arn"
+            ]
+          },
+          "RoleArn": {
+            "Fn::GetAtt": [
+              "SchedulerRole",
+              "Arn"
+            ]
+          },
+          "Input": "{}",
+          "RetryPolicy": {
+            "MaximumEventAgeInSeconds": 60,
+            "MaximumRetryAttempts": 1
+          }
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "EvidenceBucketName": {
+      "Value": {
+        "Ref": "EvidenceBucket"
+      }
+    },
+    "CollectorFunctionName": {
+      "Value": {
+        "Ref": "CollectorFunction"
+      }
+    },
+    "CollectorLogGroupName": {
+      "Value": {
+        "Ref": "CollectorLogGroup"
+      }
+    },
+    "CollectionScheduleName": {
+      "Value": {
+        "Ref": "CollectionSchedule"
+      }
+    },
+    "CollectionScheduleGroupName": {
+      "Value": {
+        "Ref": "CollectionScheduleGroup"
+      }
+    }
+  }
+}
