@@ -41,11 +41,11 @@ class InfrastructureTests(unittest.TestCase):
         self.assertEqual(encryption[0]["ServerSideEncryptionByDefault"]["SSEAlgorithm"], "AES256")
         self.assertEqual(config["OwnershipControls"]["Rules"][0]["ObjectOwnership"], "BucketOwnerEnforced")
 
-    def test_iam_and_expiration_match_actual_persistence_calls_and_leave_normalized_history(self):
+    def test_iam_matches_actual_persistence_calls_and_evidence_has_no_expiration(self):
         s3 = Mock()
         raw = b'{"timestamp":1,"stocks":{"jap":{"update":1,"stocks":[{"id":206,"name":"Xanax","quantity":0,"cost":800000}]}}}'
         result = normalize(raw, datetime(2026, 10, 8, tzinfo=timezone.utc))
-        receipt = persist(result, s3=s3, bucket="test-evidence", collection_id=UUID(int=1))
+        persist(result, s3=s3, bucket="test-evidence", collection_id=UUID(int=1))
         statements = properties("CollectorRole")["Policies"][0]["PolicyDocument"]["Statement"]
         writes = next(statement for statement in statements if statement["Action"] == ["s3:PutObject"])
         reads = next(statement for statement in statements if statement["Action"] == ["s3:GetObject"])
@@ -57,12 +57,7 @@ class InfrastructureTests(unittest.TestCase):
                 self.assertTrue(any(fnmatch.fnmatchcase(call.kwargs["Key"], pattern) for pattern in patterns))
                 for unrelated_key in ("unrelated.json", "raw/other/data.bin", "normalized/other/data.json"):
                     self.assertFalse(any(fnmatch.fnmatchcase(unrelated_key, pattern) for pattern in patterns))
-        lifecycle = properties("EvidenceBucket")["LifecycleConfiguration"]["Rules"]
-        enabled = [rule for rule in lifecycle if rule["Status"] == "Enabled"]
-        matching_raw = [rule for rule in enabled if receipt.raw_key.startswith(rule["Prefix"])]
-        self.assertEqual(len(matching_raw), 1)
-        self.assertEqual(matching_raw[0]["ExpirationInDays"], 60)
-        self.assertFalse(any(receipt.normalized_key.startswith(rule["Prefix"]) for rule in enabled))
+        self.assertNotIn("LifecycleConfiguration", properties("EvidenceBucket"))
         actions = {action for statement in statements for action in statement["Action"]}
         self.assertEqual(actions, {"s3:PutObject", "s3:GetObject", "logs:CreateLogStream", "logs:PutLogEvents"})
         self.assertTrue(all(statement["Effect"] == "Allow" for statement in statements))
@@ -78,8 +73,6 @@ class InfrastructureTests(unittest.TestCase):
         self.assertEqual(read["Action"], ["s3:GetObject"])
         self.assertEqual(write["Action"], ["s3:PutObject"])
         self.assertEqual(write["Condition"], {"Null": {"s3:if-match": "false"}})
-        rules = properties("EvidenceBucket")["LifecycleConfiguration"]["Rules"]
-        self.assertFalse(any(CONTROL_KEY.startswith(rule["Prefix"]) for rule in rules))
 
     def test_lambda_uses_handler_configuration_bounded_execution_and_existing_log_group(self):
         function = properties("CollectorFunction")
