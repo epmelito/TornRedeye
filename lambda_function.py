@@ -81,9 +81,9 @@ def lambda_handler(event, context):
         stage = "persistence"
         receipt = persist(result, s3=s3, bucket=bucket, collection_id=collection_id)
         logger.info(
-            "persisted collection_id=%s raw_key=%s normalized_key=%s "
+            "persisted collection_id=%s status=%s raw_key=%s normalized_key=%s "
             "raw_state=%s normalized_state=%s",
-            collection_id, receipt.raw_key, receipt.normalized_key,
+            collection_id, result.status, receipt.raw_key, receipt.normalized_key,
             receipt.raw_state, receipt.normalized_state,
         )
         if control_error is not None:

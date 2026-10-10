@@ -88,3 +88,5 @@ The [SAM template](template.json) defines storage retention, Lambda,
 IAM, logs, and a disabled schedule. See [deployment and operation](docs/deployment.md)
 for packaging, offline checks, deployment commands, control initialization and
 operator recovery, and data-retention limits.
+See [production monitoring](docs/monitoring.md) for persisted-observation alerts,
+private notification configuration, resource indicators and incremental costs.
