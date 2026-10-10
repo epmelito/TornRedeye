@@ -2,7 +2,8 @@
 
 `template.json` is an AWS SAM / CloudFormation definition for `eu-north-1`.
 The `tornredeye-collector` stack is deployed in `eu-north-1`, with its Scheduler
-disabled. The region assertion rejects other regions.
+enabled, as recorded in [Issue #6](https://github.com/epmelito/TornRedeye/issues/6).
+The region assertion rejects other regions.
 The schedule parameter defaults to `DISABLED`; enabling it is a separate
 operating action after manual verification.
 
@@ -37,6 +38,8 @@ Lambda concurrency quota is 10; the approved configuration does not reserve
 concurrency or require a quota increase. This command creates AWS resources and
 uploads code to a SAM-managed artifact bucket; it is not an offline check.
 It prompts for review of the change set and leaves the schedule disabled.
+For the Issue #6 retention-only update, follow the retention instructions below
+and preserve the enabled schedule instead of using this bootstrap command.
 
 ```powershell
 Invoke-CopyOutput {
@@ -97,10 +100,24 @@ unpersisted evidence; application exceptions otherwise preserve diagnostics.
 The evidence bucket is retained on stack deletion and replacement. Keep its
 physical name and preserve its logical ID when updating; replacing it retains
 old history but directs new writes to a different bucket. Deleting the stack
-stops collection but does not erase or manage retained buckets. Raw evidence
-expires after 60 days (S3 lifecycle removal is asynchronous); normalized JSON
-has no expiration. Retention does not protect against privileged manual deletion
-or lifecycle policy changes. Review data-resource changes in every change set.
+stops collection but does not erase or manage retained buckets. The template
+retains complete YATA raw responses and normalized JSON indefinitely, with no
+S3 lifecycle expiration or storage-class transition. Raw keys remain under
+`raw/yata/jap/206/`; successful responses contain the full export, not only
+Japan Xanax records. Error and partial response evidence is also retained.
+The previous deployed rule expires raw evidence after 60 days until this change
+is separately approved and deployed. Removing expiration does not restore
+already deleted evidence. Retention does not protect against privileged manual
+deletion or future lifecycle policy changes.
+
+For the Issue #6 retention-only update, preserve the existing EvidenceBucket
+logical ID and physical bucket. Independently review the CloudFormation change
+set before execution: the bucket must update in place, without replacement or
+unrelated resource changes. Preserve `ScheduleState=ENABLED`; do not use the
+bootstrap deploy command above with `ScheduleState=DISABLED` for this update.
+Deployment requires separate authorization. After deployment, verify the live
+bucket has no expiration rule and existing raw/normalized objects remain
+accessible. No live changes or object recovery are performed by local validation.
 
 At one-minute intervals, the nominal schedule has 1,440 opportunities/day, or
 43,200 in 30 days, five times the previous schedule. Usually each actual retrieval
@@ -110,7 +127,11 @@ control GetObject and three conditional control PutObject operations; ordinary
 skips still perform one control read and emit a log. A spacing wait adds one
 control re-read and up to 15 seconds of billed Lambda time. Costs depend on Lambda time,
 S3 request/data volume, logs, retries, and any retained or deployment artifact
-buckets. Normalized history grows without expiry. Disabled scheduling prevents
+buckets. Raw and normalized history grow without expiry. At the Issue #6
+measured average of 14,719 bytes per raw object, one retrieval per minute would
+add approximately 7.21 GiB/year of raw data; actual growth depends on response
+size and admitted requests. S3 Standard retention is approved for the initial
+archive. Disabled scheduling prevents
 scheduled invocations, but retained data and deployment artifacts can still cost
 money. No account pricing verification has been performed.
 
