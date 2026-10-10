@@ -11,6 +11,13 @@
         "ENABLED"
       ],
       "Description": "Keep disabled until manual collection and persistence are verified"
+    },
+    "OperatorEmail": {
+      "Type": "String",
+      "Default": "",
+      "NoEcho": true,
+      "AllowedPattern": "^$|^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$",
+      "Description": "Optional private operator email; confirm the SNS subscription before enabling production alerts"
     }
   },
   "Rules": {
@@ -301,6 +308,250 @@
           }
         }
       }
+    },
+    "MonitoringTopic": {
+      "Type": "AWS::SNS::Topic"
+    },
+    "OperatorSubscription": {
+      "Type": "AWS::SNS::Subscription",
+      "Condition": "HasOperatorEmail",
+      "Properties": {
+        "Protocol": "email",
+        "Endpoint": {
+          "Ref": "OperatorEmail"
+        },
+        "TopicArn": {
+          "Ref": "MonitoringTopic"
+        }
+      }
+    },
+    "PersistedObservationFilter": {
+      "Type": "AWS::Logs::MetricFilter",
+      "Properties": {
+        "LogGroupName": {
+          "Ref": "CollectorLogGroup"
+        },
+        "FilterPattern": "\"persisted\" \"status=observed\"",
+        "MetricTransformations": [
+          {
+            "MetricNamespace": {
+              "Fn::Sub": "TornRedeye/${AWS::StackName}"
+            },
+            "MetricName": "PersistedObservations",
+            "MetricValue": "1",
+            "DefaultValue": 0,
+            "Unit": "Count"
+          }
+        ]
+      }
+    },
+    "PollingHaltFilter": {
+      "Type": "AWS::Logs::MetricFilter",
+      "Properties": {
+        "LogGroupName": {
+          "Ref": "CollectorLogGroup"
+        },
+        "FilterPattern": "\"collection skipped\" \"reason=halted:\"",
+        "MetricTransformations": [
+          {
+            "MetricNamespace": {
+              "Fn::Sub": "TornRedeye/${AWS::StackName}"
+            },
+            "MetricName": "PollingHalts",
+            "MetricValue": "1",
+            "DefaultValue": 0,
+            "Unit": "Count"
+          }
+        ]
+      }
+    },
+    "MissingObservationsAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "DependsOn": [
+        "PersistedObservationFilter",
+        "MonitoringTopicPolicy"
+      ],
+      "Properties": {
+        "ActionsEnabled": {
+          "Fn::If": [
+            "MonitoringActionsEnabled",
+            true,
+            false
+          ]
+        },
+        "AlarmActions": [
+          {
+            "Ref": "MonitoringTopic"
+          }
+        ],
+        "OKActions": [
+          {
+            "Ref": "MonitoringTopic"
+          }
+        ],
+        "ComparisonOperator": "LessThanThreshold",
+        "Threshold": 1,
+        "EvaluationPeriods": 15,
+        "DatapointsToAlarm": 15,
+        "TreatMissingData": "breaching",
+        "AlarmName": {
+          "Fn::Sub": "${AWS::StackName}-missing-observations"
+        },
+        "AlarmDescription": "No successfully persisted observed result in approximately 15 minutes. Check logs, S3 evidence, schedule and guard; HTTP success and persisted missing/error results do not count.",
+        "Metrics": [
+          {
+            "Id": "observations",
+            "ReturnData": false,
+            "MetricStat": {
+              "Metric": {
+                "Namespace": {
+                  "Fn::Sub": "TornRedeye/${AWS::StackName}"
+                },
+                "MetricName": "PersistedObservations"
+              },
+              "Period": 60,
+              "Stat": "Sum"
+            }
+          },
+          {
+            "Id": "heartbeat",
+            "Expression": "FILL(observations, 0)",
+            "ReturnData": true
+          }
+        ]
+      }
+    },
+    "CollectionErrorsAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "ActionsEnabled": {
+          "Fn::If": [
+            "MonitoringActionsEnabled",
+            true,
+            false
+          ]
+        },
+        "AlarmActions": [
+          {
+            "Ref": "MonitoringTopic"
+          }
+        ],
+        "OKActions": [
+          {
+            "Ref": "MonitoringTopic"
+          }
+        ],
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Threshold": 1,
+        "EvaluationPeriods": 5,
+        "DatapointsToAlarm": 3,
+        "TreatMissingData": "notBreaching",
+        "AlarmName": {
+          "Fn::Sub": "${AWS::StackName}-collection-errors"
+        },
+        "AlarmDescription": "Lambda errors in at least 3 of 5 one-minute periods, including collection, configuration, control, persistence or runtime timeout. OK means the error threshold no longer breaches, not proof of observation recovery.",
+        "Namespace": "AWS/Lambda",
+        "MetricName": "Errors",
+        "Dimensions": [
+          {
+            "Name": "FunctionName",
+            "Value": {
+              "Ref": "CollectorFunction"
+            }
+          }
+        ],
+        "Period": 60,
+        "Statistic": "Sum"
+      },
+      "DependsOn": [
+        "MonitoringTopicPolicy"
+      ]
+    },
+    "PollingHaltAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "DependsOn": [
+        "PollingHaltFilter",
+        "MonitoringTopicPolicy"
+      ],
+      "Properties": {
+        "ActionsEnabled": {
+          "Fn::If": [
+            "MonitoringActionsEnabled",
+            true,
+            false
+          ]
+        },
+        "AlarmActions": [
+          {
+            "Ref": "MonitoringTopic"
+          }
+        ],
+        "OKActions": [
+          {
+            "Ref": "MonitoringTopic"
+          }
+        ],
+        "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+        "Threshold": 1,
+        "EvaluationPeriods": 1,
+        "DatapointsToAlarm": 1,
+        "TreatMissingData": "notBreaching",
+        "AlarmName": {
+          "Fn::Sub": "${AWS::StackName}-polling-halted"
+        },
+        "AlarmDescription": "Guard returned halted; inspect restrictions or stale attempt before operator recovery. OK means no recent halt log; use observation heartbeat to confirm recovery.",
+        "Namespace": {
+          "Fn::Sub": "TornRedeye/${AWS::StackName}"
+        },
+        "MetricName": "PollingHalts",
+        "Period": 60,
+        "Statistic": "Sum"
+      }
+    },
+    "MonitoringTopicPolicy": {
+      "Type": "AWS::SNS::TopicPolicy",
+      "Properties": {
+        "Topics": [
+          {
+            "Ref": "MonitoringTopic"
+          }
+        ],
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "cloudwatch.amazonaws.com"
+              },
+              "Action": "sns:Publish",
+              "Resource": {
+                "Ref": "MonitoringTopic"
+              },
+              "Condition": {
+                "StringEquals": {
+                  "aws:SourceAccount": {
+                    "Ref": "AWS::AccountId"
+                  }
+                },
+                "ArnEquals": {
+                  "aws:SourceArn": [
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${AWS::StackName}-missing-observations"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${AWS::StackName}-collection-errors"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${AWS::StackName}-polling-halted"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
     }
   },
   "Outputs": {
@@ -328,6 +579,38 @@
       "Value": {
         "Ref": "CollectionScheduleGroup"
       }
+    },
+    "MonitoringTopicArn": {
+      "Value": {
+        "Ref": "MonitoringTopic"
+      }
+    },
+    "MonitoringMetricNamespace": {
+      "Value": {
+        "Fn::Sub": "TornRedeye/${AWS::StackName}"
+      }
+    }
+  },
+  "Conditions": {
+    "HasOperatorEmail": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "OperatorEmail"
+            },
+            ""
+          ]
+        }
+      ]
+    },
+    "MonitoringActionsEnabled": {
+      "Fn::Equals": [
+        {
+          "Ref": "ScheduleState"
+        },
+        "ENABLED"
+      ]
     }
   }
 }

@@ -131,6 +131,115 @@ class InfrastructureTests(unittest.TestCase):
         self.assertEqual(properties("CollectorRole")["AssumeRolePolicyDocument"]["Statement"][0]["Principal"], {"Service": "lambda.amazonaws.com"})
 
 
+class MonitoringTests(unittest.TestCase):
+    def test_metrics_reuse_logs_without_dimensions_or_s3_request_monitoring(self):
+        expected = {
+            "PersistedObservationFilter": ('"persisted" "status=observed"', "PersistedObservations"),
+            "PollingHaltFilter": ('"collection skipped" "reason=halted:"', "PollingHalts"),
+        }
+        filters = {name for name, resource in RESOURCES.items()
+                   if resource["Type"] == "AWS::Logs::MetricFilter"}
+        self.assertEqual(filters, set(expected))
+        for name, (pattern, metric) in expected.items():
+            config = properties(name)
+            self.assertEqual(config["LogGroupName"], {"Ref": "CollectorLogGroup"})
+            self.assertEqual(config["FilterPattern"], pattern)
+            self.assertEqual(config["MetricTransformations"], [{
+                "MetricNamespace": {"Fn::Sub": "TornRedeye/${AWS::StackName}"},
+                "MetricName": metric, "MetricValue": "1", "DefaultValue": 0, "Unit": "Count",
+            }])
+        self.assertNotIn("MetricsConfigurations", properties("EvidenceBucket"))
+
+    def test_heartbeat_window_missing_data_and_recovery_contract(self):
+        alarm = properties("MissingObservationsAlarm")
+        self.assertEqual(alarm["ComparisonOperator"], "LessThanThreshold")
+        self.assertEqual(alarm["Threshold"], 1)
+        self.assertEqual(alarm["EvaluationPeriods"], 15)
+        self.assertEqual(alarm["DatapointsToAlarm"], 15)
+        self.assertEqual(alarm["TreatMissingData"], "breaching")
+        metric, expression = alarm["Metrics"]
+        self.assertEqual(metric["Id"], "observations")
+        self.assertEqual(metric["MetricStat"]["Period"], 60)
+        self.assertEqual(metric["MetricStat"]["Stat"], "Sum")
+        self.assertEqual(metric["MetricStat"]["Metric"]["MetricName"], "PersistedObservations")
+        self.assertFalse(metric["ReturnData"])
+        self.assertEqual(expression, {
+            "Id": "heartbeat", "Expression": "FILL(observations, 0)", "ReturnData": True,
+        })
+        # verify the window contract; AWS ingestion/evaluation timing needs a live check
+        def breaches(window):
+            return sum((value or 0) < alarm["Threshold"] for value in window[-15:]) >= alarm["DatapointsToAlarm"]
+        self.assertFalse(breaches([1] + [None] * 14))
+        self.assertTrue(breaches([None] * 15))
+        self.assertTrue(breaches([0] * 15))
+        self.assertFalse(breaches([None] * 15 + [1]))
+
+    def test_failure_and_halt_alarms_and_schedule_aware_notification_actions(self):
+        errors = properties("CollectionErrorsAlarm")
+        self.assertEqual(errors["Namespace"], "AWS/Lambda")
+        self.assertEqual(errors["MetricName"], "Errors")
+        self.assertEqual(errors["Dimensions"], [{"Name": "FunctionName", "Value": {"Ref": "CollectorFunction"}}])
+        self.assertEqual(properties("PollingHaltAlarm")["MetricName"], "PollingHalts")
+        for name, periods, breaching_periods in (
+            ("CollectionErrorsAlarm", 5, 3), ("PollingHaltAlarm", 1, 1),
+        ):
+            config = properties(name)
+            self.assertEqual(config["Period"], 60)
+            self.assertEqual(config["Statistic"], "Sum")
+            self.assertEqual(config["EvaluationPeriods"], periods)
+            self.assertEqual(config["DatapointsToAlarm"], breaching_periods)
+            self.assertEqual(config["Threshold"], 1)
+            self.assertEqual(config["ComparisonOperator"], "GreaterThanOrEqualToThreshold")
+            self.assertEqual(config["TreatMissingData"], "notBreaching")
+        for name in ("MissingObservationsAlarm", "CollectionErrorsAlarm", "PollingHaltAlarm"):
+            config = properties(name)
+            self.assertIn("MonitoringTopicPolicy", RESOURCES[name]["DependsOn"])
+            self.assertEqual(config["ActionsEnabled"], {"Fn::If": ["MonitoringActionsEnabled", True, False]})
+            for action in ("AlarmActions", "OKActions"):
+                self.assertEqual(config[action], [{"Ref": "MonitoringTopic"}])
+        self.assertEqual(TEMPLATE["Conditions"]["MonitoringActionsEnabled"], {
+            "Fn::Equals": [{"Ref": "ScheduleState"}, "ENABLED"],
+        })
+
+    def test_error_alarm_requires_three_breaching_minutes_in_five(self):
+        alarm = properties("CollectionErrorsAlarm")
+
+        # check the configured threshold; service timing is verified after deployment
+        def breaches(window):
+            return sum((value or 0) >= alarm["Threshold"]
+                       for value in window[-alarm["EvaluationPeriods"]:]) >= alarm["DatapointsToAlarm"]
+
+        self.assertFalse(breaches([None] * 5))
+        self.assertFalse(breaches([0, 0, 0, 1, 1]))
+        self.assertFalse(breaches([0, 0, 0, 0, 3]))
+        self.assertTrue(breaches([1, 0, 1, 0, 1]))
+        self.assertFalse(breaches([1, 0, 1, 0, 1, 0]))
+
+    def test_private_configurable_destination_and_scoped_publish_permission(self):
+        self.assertEqual(TEMPLATE["Parameters"]["OperatorEmail"]["Default"], "")
+        self.assertTrue(TEMPLATE["Parameters"]["OperatorEmail"]["NoEcho"])
+        self.assertEqual(RESOURCES["OperatorSubscription"]["Condition"], "HasOperatorEmail")
+        self.assertEqual(properties("OperatorSubscription"), {
+            "Protocol": "email", "Endpoint": {"Ref": "OperatorEmail"},
+            "TopicArn": {"Ref": "MonitoringTopic"},
+        })
+        policy = properties("MonitoringTopicPolicy")["PolicyDocument"]["Statement"]
+        self.assertEqual(len(policy), 1)
+        statement = policy[0]
+        self.assertEqual(statement["Principal"], {"Service": "cloudwatch.amazonaws.com"})
+        self.assertEqual(statement["Action"], "sns:Publish")
+        self.assertEqual(statement["Resource"], {"Ref": "MonitoringTopic"})
+        self.assertEqual(statement["Condition"]["StringEquals"], {
+            "aws:SourceAccount": {"Ref": "AWS::AccountId"},
+        })
+        permitted = statement["Condition"]["ArnEquals"]["aws:SourceArn"]
+        names = [properties(name)["AlarmName"]["Fn::Sub"] for name in
+                 ("MissingObservationsAlarm", "CollectionErrorsAlarm", "PollingHaltAlarm")]
+        self.assertEqual([arn["Fn::Sub"].split(":alarm:")[1] for arn in permitted], names)
+        self.assertTrue(all(arn["Fn::Sub"].startswith(
+            "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:") for arn in permitted))
+
+
 class PackageTests(unittest.TestCase):
     def test_package_contains_only_required_modules_and_loads_without_sdk_or_repo(self):
         self.assertEqual(properties("CollectorFunction")["CodeUri"], ".aws-sam/collector.zip")

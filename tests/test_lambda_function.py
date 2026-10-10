@@ -72,6 +72,57 @@ class HandlerTests(unittest.TestCase):
         self.assertIn(f"normalized_key={NORMALIZED_KEY}", output)
         self.assertNotIn(RAW.decode(), output)
 
+    def test_observation_metric_requires_completed_persistence_of_an_observed_result(self):
+        cases = [
+            (self.result, False, True),
+            (normalize(b'{"timestamp":1,"stocks":{"jap":{"update":0,"stocks":[]}}}', NOW), False, False),
+            (normalize(b"invalid", NOW), False, False),
+            (CollectionResult("collection_failed", NOW, None, http_status=503), False, False),
+            (self.result, True, False),
+        ]
+        for result, storage_failure, expected in cases:
+            with self.subTest(status=result.status, storage_failure=storage_failure):
+                self.collect.return_value = result
+                self.persist.side_effect = OSError("S3 failed") if storage_failure else None
+                with self.assertLogs("lambda_function", level="INFO") as logs:
+                    if storage_failure or result.status in ("malformed", "collection_failed"):
+                        with self.assertRaises((OSError, handler.CollectionError)):
+                            handler.lambda_handler({}, self.context)
+                    else:
+                        handler.lambda_handler({}, self.context)
+                matches = [line for line in logs.output
+                           if "persisted collection_id=" in line and "status=observed" in line]
+                self.assertEqual(len(matches), int(expected))
+
+    def test_halt_logs_are_distinct_from_ordinary_skips_without_collection(self):
+        for reason in ("halted: HTTP 403; operator intervention required",
+                       "halted: stale in-flight attempt; operator review required",
+                       "in_flight", "control_conflict", "not_before=2026-10-08T12:01:00Z",
+                       "insufficient_execution_time"):
+            with self.subTest(reason=reason):
+                self.guard.acquire.return_value = reason
+                with self.assertLogs("lambda_function", level="INFO") as logs:
+                    summary = handler.lambda_handler({}, self.context)
+                self.assertEqual(summary, {"status": "skipped", "reason": reason})
+                matches = [line for line in logs.output
+                           if "collection skipped" in line and "reason=halted:" in line]
+                self.assertEqual(len(matches), int(reason.startswith("halted:")))
+                self.assertFalse(any("persisted collection_id=" in line for line in logs.output))
+        self.collect.assert_not_called()
+        self.persist.assert_not_called()
+
+    def test_release_failure_keeps_persistence_heartbeat_and_signals_invocation_error(self):
+        error = RuntimeError("control release failed")
+        self.guard.finish.side_effect = error
+        with self.assertLogs("lambda_function", level="INFO") as logs:
+            with self.assertRaises(RuntimeError) as raised:
+                handler.lambda_handler({}, self.context)
+        self.assertIs(raised.exception, error)
+        self.persist.assert_called_once()
+        output = "\n".join(logs.output)
+        self.assertIn(f"persisted collection_id={RUN_ID} status=observed", output)
+        self.assertIn("invocation failed stage=control_release", output)
+
     def test_configuration_is_read_from_environment(self):
         with patch.dict("os.environ", {
             "DESTINATION_BUCKET": "other-evidence", "YATA_TIMEOUT_SECONDS": "2.5",

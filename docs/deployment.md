@@ -92,8 +92,10 @@ retrieval has its own UUID; these settings do not reconstruct an earlier result.
 
 Inspect the collector logs and Lambda `Errors`, `Throttles`, and
 `AsyncEventsDropped` metrics, plus Scheduler delivery failure metrics. A
-Scheduler rejection can occur before a handler log exists. This slice adds no
-alarms, dead-letter queue, or automatic recovery; expired/failed deliveries can
+Scheduler rejection can occur before a handler log exists. See
+[production monitoring](monitoring.md) for the offline alarm definitions,
+private email configuration and predeployment costs. There is no dead-letter
+queue or automatic recovery; expired/failed deliveries can
 leave collection gaps. Hard timeouts or S3 failures can leave raw-only or
 unpersisted evidence; application exceptions otherwise preserve diagnostics.
 
@@ -304,7 +306,9 @@ lost observations. Preserve valid history and unresolved gaps; never claim a
 later retrieval recovers missed stock history. Unchanged valid observations
 remain successful retrievals.
 
-Automatic partial-write reconstruction, alarms and operator tooling are possible
-future improvements and are not implemented. Review restriction handling,
+Automatic partial-write reconstruction and operator tooling are possible
+future improvements and are not implemented. Alarm definitions and their
+deployment verification requirements are documented in [monitoring](monitoring.md).
+Review restriction handling,
 conditional-write support, permissions and interruption behavior in AWS before
 enabling unattended polling. Keep the Scheduler disabled during that review.
