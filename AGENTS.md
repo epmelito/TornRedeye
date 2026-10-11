@@ -72,6 +72,14 @@ Follow the `engineering` skill for implementation, testing, security, reporting,
 and bounded review details. Follow `github-workflow` for branch, issue, commit,
 pull request, and finalization procedures.
 
+Load [reporting-engineering](.agents/skills/reporting-engineering/SKILL.md)
+alongside `engineering` when implementing or reviewing user-facing reports,
+dashboards, charts, tables, navigation, language, or responsive presentation.
+Use its project-wide read-only audit mode only when that scope is requested.
+Reporting presentation and user journeys belong to `reporting-engineering`;
+data processing, queries, evidence integrity, and AWS publication security remain
+under `engineering`. GitHub operations remain under `github-workflow`.
+
 ## Documentation and decisions
 
 Give each permanent document one authoritative purpose. Prefer code, tests,
@@ -79,9 +87,11 @@ configuration, and source contracts for discoverable behavior; do not copy mutab
 inventories into multiple documents. Separate current status, historical
 evidence, and temporary handoffs.
 
-Update documentation only when the completed work would otherwise leave an
-accepted requirement, decision, or operating instruction inaccurate. Identify
-conflicts rather than silently reconciling them.
+After implementation changes, review documentation directly affected by the
+change. Update any instructions, behavior descriptions, contracts, or examples
+that would otherwise become inaccurate or incomplete. Avoid unrelated
+documentation changes and duplication. Identify conflicts rather than silently
+reconciling them.
 
 Record a durable decision only when it resolves a genuine architectural or
 contractual question. Do not create speculative decisions or process documents.
