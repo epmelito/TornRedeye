@@ -35,6 +35,16 @@ credentials, operator destinations and exception details are never copied.
 Frontend text uses `textContent`, not HTML interpolation. Missing values remain
 null/unavailable and measured zero remains zero.
 
+The page presents recent gap candidates and observation/provider freshness before
+seven-day history. Hourly trends and values remain available in an expandable
+section. Consumption values retain units and availability-aware classifications;
+coverage, provenance and UTC windows are accessible through each row's details.
+On narrow screens, consumption rows become labelled entries rather than requiring
+horizontal scanning of the primary values. A successful query with no numeric
+samples still displays unavailable, while reported zero remains measured data
+(or a derived zero subtotal). These presentation rules do not establish complete
+coverage or alter the published data contract.
+
 Retrieval errors are isolated by source. A snapshot can be valid and partial;
 `available` means the queries/selected sources were available, **not** complete
 historical coverage. Even an exhausted log query or successful metric query can
