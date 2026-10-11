@@ -20,8 +20,8 @@ validate proportionately, and report the outcome concisely.
    tests, and accepted decisions. Expand only when the change requires it.
 3. Choose the smallest complete solution that satisfies confirmed requirements.
    Preserve existing patterns unless evidence justifies changing them.
-4. Implement authorized behavior and focused tests. Update authoritative
-   documentation only when an accepted contract or decision changes.
+4. Implement authorized behavior and focused tests. Assess directly affected
+   documentation afterward and update it when accuracy or completeness requires.
 5. Validate affected behavior, including relevant failures and reruns. Run
    broad checks once after stabilization only when repository guidance requires
    them. Do not rerun unchanged checks merely for reassurance.
