@@ -1,2 +1,8 @@
 .aws-sam/
 __pycache__/
+evidence-backups/
+.evidence-backups/
+manifest.json
+writer.lock
+/inventory/
+/objects/
