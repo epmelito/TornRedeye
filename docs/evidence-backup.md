@@ -20,12 +20,13 @@ and owner-selected credentials through its normal credential chain. The client
 uses `eu-north-1`, 10-second connection/30-second read timeouts and at most three
 SDK attempts per request. It does not modify IAM or resources.
 
-Required read permissions are `s3:ListBucket` on the existing private evidence
-bucket, restricted by `s3:prefix` to exactly `raw/yata/jap/206/` and
+For full export, required read permissions are `s3:ListBucket` on the private
+evidence bucket, restricted by `s3:prefix` to exactly `raw/yata/jap/206/` and
 `normalized/yata/jap/206/`, and `s3:GetObject` on objects under those prefixes.
 No PutObject, DeleteObject, polling-control, logs or deployment-artifact access
-is needed. Existing bucket encryption is SSE-S3; future KMS encryption would
-require a separately reviewed decrypt permission. This inventories current
+is needed. The repository configures SSE-S3; verify deployed encryption before
+export. KMS encryption would require a separately reviewed decrypt permission.
+This inventories current
 objects, not historical versions or evidence already deleted.
 
 Choose an owner-only backup directory **outside all Git working trees**, on a
@@ -47,6 +48,229 @@ If collection continued, the pause ended, or the attestation is doubtful, start
 a new inventory in a new directory after an approved stable cutoff. Do not edit
 the old manifest to assert completeness. Concurrent-write reconciliation is not
 implemented. Preserve the old evidence and record the limitation.
+
+## Inventory and cost preflight before export approval
+
+[Issue #21](https://github.com/epmelito/TornRedeye/issues/21) prepares the following
+future procedure. Only documentation and public pricing research are authorized
+for this package. No account inspection or inventory has been executed.
+
+### Read-only prerequisites
+
+Before separately approved live execution, confirm the owner-supplied bucket,
+account ID, `eu-north-1` region and credential identity. Inventory needs only
+[`s3:ListBucket`](https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html)
+on `arn:aws:s3:::<evidence-bucket>`, with `StringEquals` on `s3:prefix` allowing
+exactly `raw/yata/jap/206/` and `normalized/yata/jap/206/`. An
+[IAM numeric condition](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements_condition_operators.html)
+`NumericLessThanEquals` on `s3:max-keys` of 100 can enforce the page size. Use an
+existing identity with this approved scope; do not grant permissions in this
+package. Inventory needs no `s3:GetObject`, writes or collector permissions.
+
+With separately approved bucket-configuration reads, obtain the **live** lifecycle
+configuration using `s3:GetLifecycleConfiguration` on that bucket. From the
+repository root, using the existing helpers and AWS CLI, the future command is:
+
+```powershell
+. .\.chatgpt\powershell-helpers.ps1
+$sourceBucket = '<approved-evidence-bucket>'
+$sourceOwner = '<approved-12-digit-account-id>'
+$env:AWS_RETRY_MODE = 'standard'
+$env:AWS_MAX_ATTEMPTS = '3'
+Invoke-CopyOutput {
+    Invoke-NativeCommand -FilePath aws -ArgumentList @(
+        's3api', 'get-bucket-lifecycle-configuration', '--bucket', $sourceBucket,
+        '--expected-bucket-owner', $sourceOwner, '--region', 'eu-north-1',
+        '--cli-connect-timeout', '10', '--cli-read-timeout', '30', '--no-cli-pager'
+    )
+}
+```
+
+Keep configuration output private. Review enabled rules, whole-bucket/prefix/tag
+filters, expiration dates/ages, transitions and noncurrent-version expiration
+against both prefixes. The exact
+[`NoSuchLifecycleConfiguration`](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketLifecycleConfiguration.html)
+error means no lifecycle configuration; AccessDenied, other errors or unavailable
+results mean **unknown**, not no expiration. Record UTC inspection time and
+private results. Confirm deployed bucket ownership/region and, if retention
+assurances rely on them, versioning/Object Lock using separately permitted
+`s3:GetBucketVersioning`/`s3:GetBucketObjectLockConfiguration` reads. Repository
+`Retain` and lifecycle templates do not prove deployed state or protection from
+account closure/manual deletion. Expiration removal cannot recover prior losses.
+Unexpected expiration/transitions require an owner decision; do not change them.
+
+### Bounded provisional listing
+
+Keep collection running for this provisional preflight and omit a cutoff
+attestation. Use a fresh private directory outside Git. The CLI has a soft
+runtime limit but no LIST-count cap; `--max-bytes` bounds export, not inventory.
+This inline invocation reuses `inventory()` with a listing-only request limiter;
+no new repository tool or SDK/persistence behavior is required. The example
+proposes **100 logical LIST calls, 100 keys/page, 60 seconds and three SDK attempts
+per call**; approve these limits and a total preflight spending allowance first.
+
+After separate live approval, run from the repository root:
+
+```powershell
+$preflightDirectory = 'D:\PrivateEvidence\yata-provisional'
+$inventoryScript = @'
+import json, sys
+from evidence_backup import inventory
+if sys.argv[4] != '--live-read-approved':
+    raise SystemExit('Separate live inventory approval is required')
+import boto3
+from botocore.config import Config
+class RequestLimitReached(Exception):
+    pass
+class ListingOnly:
+    def __init__(self):
+        self.calls, self.classes = 0, set()
+        self.client = boto3.client('s3', region_name='eu-north-1', config=Config(
+            connect_timeout=10, read_timeout=30,
+            retries={'mode': 'standard', 'total_max_attempts': 3}))
+    def list_objects_v2(self, **request):
+        if self.calls >= 100:
+            raise RequestLimitReached()
+        self.calls += 1
+        page = self.client.list_objects_v2(**request, ExpectedBucketOwner=sys.argv[3])
+        self.classes.update(obj.get('StorageClass', 'UNKNOWN') for obj in page.get('Contents', []))
+        return page
+client = ListingOnly()
+manifest = inventory(s3=client, bucket=sys.argv[1], directory=sys.argv[2],
+                     page_size=100, max_seconds=60)
+complete = all(state['complete'] and not state['error'] for state in manifest['inventory'])
+print(json.dumps({'logical_list_calls_this_run': client.calls,
+                  'storage_classes_seen_this_run': sorted(client.classes),
+                  'pagination_complete': complete, 'consistent_cutoff': False,
+                  'prefixes': {prefix: {field: state[field] for field in
+                      ('objects', 'bytes', 'pages', 'complete', 'error')}
+                      for prefix, state in zip(manifest['prefixes'], manifest['inventory'])}}))
+raise SystemExit(0 if complete else 2)
+'@
+Invoke-CopyOutput {
+    Invoke-NativeCommand -FilePath python -ArgumentList @(
+        '-B', '-c', $inventoryScript, $sourceBucket, $preflightDirectory,
+        $sourceOwner, '--live-read-approved'
+    )
+}
+```
+
+The limiter forwards at most 100 calls, including failed calls. With the confirmed
+region and [configured retry policy](https://docs.aws.amazon.com/boto3/latest/guide/retries.html),
+budget up to 300 ordinary LIST attempts: **$0.0015 per invocation** at the rate
+below. This request-component bound excludes credential-service calls, unexpected
+region redirects and configuration reads; it is not a total-cost cap. Stop and
+resolve unexpected region/identity behavior before another invocation. SDK
+retries/timeouts, local checkpoint checks and credential resolution can exceed
+the soft runtime. Do not
+use console browsing, per-object HEAD/GET, debug logging or automatic rerun loops.
+Budget configuration reads and listing-response egress separately; cap the
+approved number of invocations and stop for review before replenishing it.
+
+Each accepted page is checkpointed before the next listing. The summary reports
+committed counts/bytes/pages per prefix, failures and classes observed this run;
+it exposes no object keys/tokens. Capture each run privately. Storage class is
+returned by S3 but **not saved in the existing manifest**; class observations may
+include an uncommitted/repeated page, so do not sum them as object counts. Preserve
+the observations from every slice; UNKNOWN, missing slice records or changing
+classes leave retrieval assumptions unresolved. The manifest counts remain the
+authoritative checkpointed listing totals.
+
+Exit 2/helper failure means incomplete pagination, including `RequestLimitReached`,
+`runtime_limit`, source errors or page conflicts. Counts from an incomplete
+prefix describe only committed pages; do not extrapolate a full archive or treat
+unknown coverage as zero. After reviewing the failure and remaining approval
+budget, rerun the identical command/directory to resume its saved token. A killed
+process can leave a lock; follow the interruption procedure below. Do not edit
+tokens or delete conflicting pages. An exception before the summary is produced
+also leaves the result unresolved.
+
+Exit 0 here means both listings reached their final pages, **not** a consistent
+cutoff or a verified backup. Under active collection, additions/deletions can
+escape a traversal. For later full export, separately approve the pause/drain
+requirements above and create a new stable-cutoff inventory; do not relabel this
+provisional manifest. The existing CLI below intentionally uses backup-verification
+exit semantics (normally 1 for inventory with pending files), unlike this
+listing-only summary's 0/2 semantics.
+
+### Pricing evidence and worksheet
+
+Public prices checked **2026-10-11**, USD gross before tax, credits, allowances or
+discounts. Region is EU (Stockholm), `eu-north-1`. Recheck before live approval.
+The [S3 regional offer](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/current/eu-north-1/index.json)
+was published **2026-09-28**, with these terms effective **2026-09-01**.
+The [data-transfer regional offer](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSDataTransfer/current/eu-north-1/index.json)
+was published **2026-09-16**, with outbound terms effective **2026-06-01**.
+
+| Component | Reference rate | Assumption |
+| --- | --- | --- |
+| LIST | $0.005/1,000 requests | Standard Tier1 rate; LIST uses it across storage classes |
+| Standard GET | $0.0004/1,000 requests | All exported objects confirmed Standard |
+| Standard-IA / One Zone-IA GET | $0.001/1,000 requests | Substitute for objects in those classes |
+| Standard-IA / One Zone-IA retrieval | $0.01/GB retrieved | Additional to GET and transfer |
+| Stockholm internet transfer | $0.09/GB, first 10,240 chargeable GB tier | Ordinary regional endpoint; account-wide tier/allowance use unknown |
+| Existing Standard storage | $0.023/GB-month, first 51,200 GB tier | Ongoing source retention, not an extra copy or export fee |
+
+[S3 pricing](https://aws.amazon.com/s3/pricing/) specifies LIST's Standard request
+rate, no Standard retrieval fee, class-dependent retrieval/restore charges and
+binary storage GB (`2^30` bytes). Glacier/archived tiers need a separately priced
+restore plan; this inventory does not authorize RestoreObject. Use bytes as the
+base unit; report local GiB as `bytes / 2^30`. For outbound estimates use the same
+conversion as a planning assumption and reconcile AWS's billing-meter units.
+[AWS's transfer FAQ](https://aws.amazon.com/about-aws/global-infrastructure/global-network/faqs/)
+describes 100 GB/month free internet transfer shared across services/regions
+(excluding China/GovCloud); unused eligible allowance is unmeasured. Assume zero
+available allowance for the conservative estimate, not zero charges. CloudFront
+allowances and credits do not establish free export.
+
+Fill the worksheet only after approved measurements; no archive totals are known
+here. Let `N`, `B` and `P` be summed checkpointed objects, bytes and pages for both
+prefixes. For completed pagination at page size 100, minimum page demand is
+`sum(max(1, ceil(N_prefix / 100)))`; use observed pages because S3 can return fewer
+keys. Page totals exclude failed/retried/uncheckpointed calls.
+
+- Inventory: `C_LIST = A_LIST * 0.005 / 1000`, where `A_LIST` is billable attempts
+  across all approved invocations. Under the confirmed-region assumptions above,
+  budget `3 * sum(logical_list_calls_this_run)`, at most `300 * invocation_count`.
+  Add configuration-request charges and listing-response transfer separately;
+  inventory uses **zero canonical-object GETs** and transfers no canonical bodies.
+- Full export: minimum logical GET demand is `N` for a new destination;
+  `C_GET = sum(A_GET_class * rate_class / 1000)`. Include SDK retries and restarted
+  transfers; confirmed existing verified files need no repeat GET. Failed requests
+  can be billable; consult [S3 error billing](https://docs.aws.amazon.com/AmazonS3/latest/userguide/ErrorCodeBilling.html).
+- Retrieval: `C_retrieval = sum(retrieved_GB_class * retrieval_rate_class)`;
+  Standard is zero for this component only. Unknown classes block a firm estimate.
+- Transfer: `G_chargeable = max(0, G_sent - verified_remaining_allowance)` and,
+  within the first tier, `C_DTO = G_chargeable * 0.09`. Include listing/configuration
+  responses, repeated/partial transfers and transport overhead; billed sent bytes
+  can exceed received bytes on interruption. Above that tier, price incremental
+  bytes in the account's applicable tiers; the first-tier formula is not universal.
+- Local capacity per full copy: `B + manifest/receipt bytes + filesystem overhead
+  + largest-object staging headroom`. Inventory-only requires metadata space, not
+  capacity for downloaded bodies. Verify free space before each slice/export.
+- Two independent external copies: obtain owner-approved destination quotes and
+  units; `C_external = sum(setup_or_media_cost + stored_units * monthly_rate * months
+  + upload/request/egress/recovery_fees)` across both copies. Include encryption/key
+  recovery costs. A local second copy does not require another AWS download; a
+  second independent download repeats GET/retrieval/transfer costs. No destination
+  quote, recurring cost or source-account-independent storage has been verified.
+
+### Go/no-go for subsequent work
+
+**Current recommendation: no-go for full live export.** This package establishes
+no live counts, retention state, remaining allowances or destination quote.
+Independent review of this procedure remains an acceptance gate. After review,
+an owner may separately approve the bounded provisional listing and configuration
+checks with a cumulative request/spending allowance. No action here changes IAM,
+the collector, resources, account plan or canonical evidence.
+
+Recommend full export only after complete, validated provisional page accounting,
+resolved live retention/storage-class risks, a refreshed consistent-cutoff plan,
+an owner-approved gross-cost estimate including retry/egress uncertainty, adequate
+private capacity and approved encrypted independent destinations/key ownership.
+If the owner needs an enforceable total-dollar cap, the request limiter/runtime
+settings are insufficient: stop pending an approved cost-control decision.
+Full export, two-copy verification and isolated restoration remain separate gates.
 
 ## Intended local workflow after separate authorization
 
