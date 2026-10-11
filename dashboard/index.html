@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Torn Redeye · Operations</title><link rel="stylesheet" href="styles.css"><script src="app.js" defer></script></head>
+<body><main>
+<header><p class="eyebrow">TORN REDEYE / PUBLIC OPERATIONS</p><h1>Collection, in view.</h1>
+<p>Read-only operational evidence. All timestamps and windows are UTC.</p></header>
+<p id="publication" role="status">Loading the latest hourly snapshot…</p>
+<section aria-labelledby="freshness-title"><h2 id="freshness-title">Freshness</h2><div id="freshness" class="cards"></div></section>
+<section aria-labelledby="trend-title"><h2 id="trend-title">Seven-day reliability</h2><p id="window"></p>
+<p>Counts describe matching persistence or halt log events, not distinct collections. Missing samples remain unknown. Even returned samples cannot prove complete collection coverage.</p>
+<div id="trends"></div></section>
+<section aria-labelledby="gap-title"><h2 id="gap-title">Recent gap candidates</h2><p>No recorded positive persistence heartbeat for at least 15 minutes in the recent three-hour window. Candidates are unconfirmed: delayed, missing or duplicated telemetry can affect them.</p><div id="gaps"></div></section>
+<section aria-labelledby="usage-title"><h2 id="usage-title">Infrastructure consumption</h2><p>Measured telemetry and bounded subtotals; these are not billed amounts or complete monthly totals.</p><div id="usage"></div></section>
+<section aria-labelledby="cost-title"><h2 id="cost-title">Cost context</h2><div id="cost"></div>
+<p>Lambda requests and GB-seconds, S3 storage and operations, CloudWatch ingestion and monitoring, SNS usage, and CloudFront traffic all contribute. Collector S3 requests are unmetered: normal admitted runs attempt 5 PUTs (4 without a response body) and 1–2 control GETs; skipped runs still read control. SDK retries, conflicts and failures add uncertainty. No collector operation estimate is presented as measured usage.</p>
+<p>Free allowances are shared across the account and conditional on eligibility and remaining allowance. They do not guarantee a free dashboard. Actual total cost and remaining account allowances are unavailable here.</p></section>
+<section aria-labelledby="allowance-title"><h2 id="allowance-title">Account-wide allowance reference</h2>
+<p>Reference limits, not measured remaining balances. Eligibility, credits and other workloads can change what is available. Recheck current AWS terms before deployment.</p>
+<div class="table-wrap"><table><thead><tr><th scope="col">Service</th><th scope="col">Conditional monthly reference</th><th scope="col">Remaining allowance</th></tr></thead><tbody>
+<tr><td>Lambda</td><td>1 million requests; 400,000 GB-seconds</td><td>Unavailable</td></tr>
+<tr><td>CloudWatch</td><td>10 custom metrics; 10 standard alarm metrics; 5 GB logs (ingestion, archive and Insights terms differ); 1 million eligible API requests</td><td>Unavailable</td></tr>
+<tr><td>SNS</td><td>1 million API requests; 1,000 email notifications</td><td>Unavailable</td></tr>
+<tr><td>CloudFront pay as you go</td><td>1 TB transfer out; 10 million HTTP/HTTPS requests</td><td>Unavailable</td></tr>
+<tr><td>S3</td><td>Legacy introductory eligibility: 5 GB standard storage, 20,000 GET, 2,000 PUT/COPY/POST/LIST; newer accounts may instead use credits</td><td>Unavailable</td></tr>
+</tbody></table></div></section>
+<footer>No visitor AWS API calls. Updated hourly from existing telemetry and selected evidence; no additional provider requests.</footer>
+</main></body></html>
