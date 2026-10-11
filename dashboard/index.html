@@ -6,11 +6,11 @@
 <header><p class="eyebrow">TORN REDEYE / PUBLIC OPERATIONS</p><h1>Collection, in view.</h1>
 <p>Read-only operational evidence. All timestamps and windows are UTC.</p></header>
 <p id="publication" role="status">Loading the latest hourly snapshot…</p>
+<section aria-labelledby="gap-title"><h2 id="gap-title">Recent gap candidates</h2><p>Recent three hours · unconfirmed periods of at least 15 minutes without a recorded positive persistence heartbeat. Delayed, missing or duplicated telemetry can affect these candidates.</p><div id="gaps"></div></section>
 <section aria-labelledby="freshness-title"><h2 id="freshness-title">Freshness</h2><div id="freshness" class="cards"></div></section>
-<section aria-labelledby="trend-title"><h2 id="trend-title">Seven-day reliability</h2><p id="window"></p>
+<section aria-labelledby="trend-title"><h2 id="trend-title">Seven-day reliability</h2><details><summary>View hourly trends and values</summary><p id="window"></p>
 <p>Counts describe matching persistence or halt log events, not distinct collections. Missing samples remain unknown. Even returned samples cannot prove complete collection coverage.</p>
-<div id="trends"></div></section>
-<section aria-labelledby="gap-title"><h2 id="gap-title">Recent gap candidates</h2><p>No recorded positive persistence heartbeat for at least 15 minutes in the recent three-hour window. Candidates are unconfirmed: delayed, missing or duplicated telemetry can affect them.</p><div id="gaps"></div></section>
+<div id="trends"></div></details></section>
 <section aria-labelledby="usage-title"><h2 id="usage-title">Infrastructure consumption</h2><p>Measured telemetry and bounded subtotals; these are not billed amounts or complete monthly totals.</p><div id="usage"></div></section>
 <section aria-labelledby="cost-title"><h2 id="cost-title">Cost context</h2><div id="cost"></div>
 <p>Lambda requests and GB-seconds, S3 storage and operations, CloudWatch ingestion and monitoring, SNS usage, and CloudFront traffic all contribute. Collector S3 requests are unmetered: normal admitted runs attempt 5 PUTs (4 without a response body) and 1–2 control GETs; skipped runs still read control. SDK retries, conflicts and failures add uncertainty. No collector operation estimate is presented as measured usage.</p>

@@ -17,6 +17,7 @@ function element(tag, text, cls) {
   return node;
 }
 function validNumber(value) { return typeof value === "number" && Number.isFinite(value) && value >= 0; }
+function metricSamples(metric) { return metric.state === "available" && Array.isArray(metric.samples) ? metric.samples : []; }
 function display(value) { return validNumber(value) ? value.toLocaleString("en-US", { maximumFractionDigits: 3 }) : "Unavailable"; }
 function utc(value) { const ms = typeof value === "string" ? Date.parse(value) : NaN; return Number.isFinite(ms) ? new Date(ms).toISOString().replace(".000", "") : "Unavailable"; }
 function age(value) { const ms = typeof value === "string" ? Date.parse(value) : NaN; return Number.isFinite(ms) && ms <= Date.now() ? `${((Date.now() - ms) / 3600000).toFixed(2)} hours old · derived age` : "Age unavailable"; }
@@ -30,12 +31,28 @@ function publication(snapshot) {
   node.className = status === "current" ? "" : "stale";
   node.textContent = `${status === "current" ? "Publication current" : status === "stale" ? "Publication stale — over two hours old" : "Publication timestamp unavailable"} · ${utc(snapshot.published_at_utc)} · ${snapshot.state === "partial" ? "Partial source availability" : "Source availability reported; historical coverage remains uncertain"}`;
 }
-function table(headers, rows) {
+function table(headers, rows, className = "") {
   const wrap = element("div", undefined, "table-wrap"), t = element("table"), head = element("thead"), tr = element("tr");
+  t.className = className;
+  if (className) { t.setAttribute("role", "table"); head.setAttribute("role", "rowgroup"); tr.setAttribute("role", "row"); }
   headers.forEach(x => { const th = element("th", x); th.scope = "col"; tr.append(th); });
   head.append(tr); t.append(head);
   const body = element("tbody");
-  rows.forEach(row => { const r = element("tr"); row.forEach(x => r.append(element("td", String(x)))); body.append(r); });
+  if (className) body.setAttribute("role", "rowgroup");
+  rows.forEach(row => {
+    const r = element("tr");
+    if (className) r.setAttribute("role", "row");
+    row.forEach((x, i) => {
+      const cell = element(className && i === 0 ? "th" : "td");
+      if (className && i === 0) cell.scope = "row";
+      else cell.setAttribute("data-label", headers[i]);
+      if (className) cell.setAttribute("role", i === 0 ? "rowheader" : "cell");
+      if (typeof x === "object" && x !== null) cell.append(x);
+      else cell.textContent = String(x);
+      r.append(cell);
+    });
+    body.append(r);
+  });
   t.append(body); wrap.append(t); return wrap;
 }
 function render(snapshot) {
@@ -52,11 +69,12 @@ function render(snapshot) {
   document.getElementById("window").textContent = `${utc(snapshot.window.start_utc)} → ${utc(snapshot.window.end_utc)} · hourly, completed UTC hours`;
   const trends = document.getElementById("trends"); trends.replaceChildren();
   ["persisted_events", "collector_invocations", "collector_errors", "halt_events", "collector_throttles"].forEach(key => {
-    const m = snapshot.metrics[key] || {}, samples = Array.isArray(m.samples) ? m.samples : [];
+    const m = snapshot.metrics[key] || {}, samples = metricSamples(m);
     const section = element("div"); section.append(element("h3", labels[key]));
     const spark = element("div", undefined, "spark"), max = Math.max(1, ...samples.filter(validNumber)); spark.setAttribute("aria-hidden", "true");
     samples.forEach(v => { const bar = element("span", undefined, !validNumber(v) ? "missing" : v === 0 ? "zero" : ""); bar.style.height = `${validNumber(v) ? Math.max(2, v / max * 42) : 5}px`; spark.append(bar); });
-    section.append(spark, element("p", `${samples.filter(validNumber).length}/${samples.length} reported slots · gray = unknown, white = reported zero · measured Count`));
+    const reported = samples.filter(validNumber).length;
+    section.append(spark, element("p", `${reported}/${samples.length} reported slots · ${reported ? "Measured Count for returned values; missing values unavailable" : "Unavailable · no reported values"} · gray = unknown, white = reported zero`));
     const details = element("details"); details.append(element("summary", "Hourly values and coverage"));
     details.append(element("p", m.coverage || "Unavailable"));
     details.append(table(["Hour beginning (UTC)", "Matching events / requests / errors"], samples.map((v, i) => [utc(new Date(Date.parse(m.start_utc) + i * 3600000).toISOString()), display(v)])));
@@ -65,16 +83,24 @@ function render(snapshot) {
   const gaps = document.getElementById("gaps"); gaps.replaceChildren();
   if (snapshot.recent_heartbeat?.state !== "available") gaps.append(element("p", "Gap retrieval unavailable; absence of listed gaps does not mean healthy collection."));
   else if (!snapshot.recent_gaps?.length) gaps.append(element("p", "No 15-minute candidates in returned telemetry. This does not establish complete collection coverage."));
-  else gaps.append(table(["Start UTC", "End UTC", "Minutes", "Unknown minutes"], snapshot.recent_gaps.map(g => [utc(g.start_utc), utc(g.end_utc), display(g.minutes), display(g.unknown_minutes)])));
+  else gaps.append(table(["Start UTC", "End UTC", "Minutes", "Unknown minutes"], snapshot.recent_gaps.map(g => [utc(g.start_utc), utc(g.end_utc), display(g.minutes), display(g.unknown_minutes)]), "responsive-table"));
   const usage = document.getElementById("usage"); usage.replaceChildren();
   const rows = Object.entries(labels).map(([key, label]) => {
-    const m = snapshot.metrics[key] || {}, values = (m.samples || []).filter(validNumber);
+    const m = snapshot.metrics[key] || {}, values = metricSamples(m).filter(validNumber);
     const daily = key.startsWith("s3_");
-    return [label, values.length ? display(daily ? values[values.length - 1] : values.reduce((a,b) => a+b, 0)) : "Unavailable", m.unit || "—", daily ? "Measured latest returned daily sample" : "Derived subtotal of returned samples", `${m.reported_slots ?? 0}/${m.samples?.length ?? 0} slots; coverage unknown`, `${utc(m.start_utc)} → ${utc(m.end_utc)}`, utc(m.latest_sample_utc)];
+    const value = values.length ? (daily ? values[values.length - 1] : values.reduce((a,b) => a+b, 0)) : null;
+    return [label, display(value), m.unit || "—", !validNumber(value) ? "Unavailable" : daily ? "Measured latest returned daily sample" : "Derived subtotal of returned samples", `${m.reported_slots ?? 0}/${m.samples?.length ?? 0} slots; ${m.coverage || "coverage unknown"}`, `${utc(m.start_utc)} → ${utc(m.end_utc)}`, utc(m.latest_sample_utc), m.provenance || "Unavailable"];
   });
   const billed = snapshot.billed_compute || {};
-  rows.push(["Collector billed compute", display(billed.value), "GB-seconds", "Derived REPORT subtotal", billed.coverage || "Unavailable", `${utc(billed.start_utc)} → ${utc(billed.end_utc)}`, "Unavailable"]);
-  usage.append(table(["Signal", "Value", "Unit", "Classification", "Coverage", "Window UTC", "Latest metric bucket UTC"], rows));
+  const billedAvailable = billed.state === "available" && validNumber(billed.value);
+  rows.push(["Collector billed compute", billedAvailable ? display(billed.value) : "Unavailable", "GB-seconds", billedAvailable ? "Derived REPORT subtotal" : "Unavailable", billed.coverage || "Unavailable", `${utc(billed.start_utc)} → ${utc(billed.end_utc)}`, "Unavailable", billed.provenance || "Unavailable"]);
+  usage.append(table(["Signal", "Value and unit", "Classification", "Details"], rows.map(row => {
+    const details = element("details"); details.append(element("summary", "Coverage and time window"));
+    const notes = element("dl");
+    [["Coverage", row[4]], ["Window UTC", row[5]], ["Latest metric bucket UTC", row[6]], ["Provenance", row[7]]].forEach(([label, value]) => notes.append(element("dt", label), element("dd", value)));
+    details.append(notes);
+    return [row[0], `${row[1]} ${row[2]}`, row[3], details];
+  }), "responsive-table consumption-table"));
   usage.append(element("p", "Execution Duration is not billed duration. S3 storage samples are daily and delayed; log ingestion is not stored-log size. SNS notifications are not billable API requests or email-only delivery counts."));
   const cost = document.getElementById("cost"); cost.replaceChildren();
   const estimate = snapshot.cost?.publisher_compute_scenario;

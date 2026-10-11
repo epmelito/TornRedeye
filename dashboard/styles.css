@@ -10,18 +10,37 @@ p, footer { line-height: 1.6; color: #b9c7d8; }
 section { margin-top: 36px; }
 #publication { padding: 16px; background: #1a2939; border-left: 4px solid #8ad9c6; }
 #publication.stale, #publication.failed { border-color: #f4b860; }
-.cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .card { padding: 18px; background: #192330; border: 1px solid #36465c; border-radius: 8px; }
 .card strong { display: block; margin: 8px 0; overflow-wrap: anywhere; }
-.table-wrap { overflow-x: auto; }
+.table-wrap { overflow-x: auto; max-width: 100%; }
+main, section, .card { min-width: 0; }
+p, td, th, dd, summary { overflow-wrap: anywhere; }
 table { width: 100%; border-collapse: collapse; font-size: .9rem; }
 th, td { padding: 10px; text-align: left; border-bottom: 1px solid #36465c; }
 th { color: #8ad9c6; }
 .spark { display: flex; height: 42px; gap: 1px; align-items: end; margin: 12px 0; }
-.spark span { flex: 1; min-width: 1px; background: #8ad9c6; }
+.spark span { flex: 1; min-width: 0; background: #8ad9c6; }
 .spark .missing { height: 5px !important; background: #526074; }
 .spark .zero { height: 2px !important; background: #e4eaf2; }
 details { margin: 12px 0; }
 summary { cursor: pointer; padding: 8px 0; }
+summary:focus-visible, a:focus-visible { outline: 3px solid #8ad9c6; outline-offset: 3px; }
+.consumption-table { table-layout: fixed; }
+.consumption-table thead th:first-child { width: 25%; }
+.consumption-table thead th:nth-child(2) { width: 15%; }
+dt { color: #8ad9c6; margin-top: 10px; }
+dd { margin: 4px 0 0; line-height: 1.5; }
 footer { margin-top: 40px; border-top: 1px solid #36465c; padding-top: 20px; font-size: .85rem; }
-@media (max-width: 640px) { main { padding: 24px 16px; } .cards { grid-template-columns: 1fr; } }
+@media (max-width: 640px) {
+  main { padding: 24px 16px; }
+  .cards { grid-template-columns: 1fr; }
+  .responsive-table, .responsive-table tbody { display: block; width: 100%; }
+  .responsive-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .responsive-table tr { display: block; padding: 12px; margin: 12px 0; background: #192330; border: 1px solid #36465c; border-radius: 8px; }
+  .responsive-table tbody th { display: block; width: 100%; padding: 0 0 10px; }
+  .responsive-table td { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 12px; padding: 8px 0; }
+  .responsive-table td::before { content: attr(data-label); color: #b9c7d8; }
+  .responsive-table td:last-child { border: 0; }
+  .responsive-table td details { min-width: 0; margin: 0; }
+}
