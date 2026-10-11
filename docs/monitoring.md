@@ -1,5 +1,10 @@
 # Production monitoring and resource consumption
 
+The separate Issue #11 public operations dashboard reuses these signals. See
+[dashboard.md](dashboard.md) for its bounded publication, public coverage contract,
+security, incremental costs and deployment instructions. It changes no collector
+monitoring resources or collection behavior.
+
 Issue #8 adds offline definitions in `template.json`; deployment requires separate
 authorization and independent infrastructure/security review. Monitoring uses the
 existing collector log group, two dimensionless metrics in
@@ -78,10 +83,10 @@ testing alarm actions requires separate approved operator configuration. Confirm
 normal scheduled persistence clears the heartbeat afterward. Offline tests and
 SAM lint cannot prove AWS ingestion, alarm timing or email delivery.
 
-## Resource indicators for a future dashboard
+## Resource indicator semantics
 
-Reuse the following existing signals. This issue defines their interpretation;
-it does not implement a reader, public endpoint or periodic query. Every future
+Reuse the following existing signals. Issue #8 defines their interpretation;
+Issue #11's bounded reader is documented in [dashboard.md](dashboard.md). Every
 value needs a source, resource scope, UTC window, unit, latest sample time,
 coverage and classification (measured, derived, estimated or unavailable).
 Missing samples must remain unknown; zero-fill is only an alarm policy.
@@ -94,9 +99,9 @@ Missing samples must remain unknown; zero-fill is only an alarm policy.
 | Log ingestion and retained size | `AWS/Logs IncomingBytes` and `IncomingLogEvents`, scoped to CollectorLogGroup; sum over the window. DescribeLogGroups `storedBytes` is an eventual retained-size snapshot if separately read. | Ingestion bytes are uncompressed; retained bytes are compressed and age out under the existing 14-day policy. They are different quantities. IncomingBytes is not a storage total or an exact invoiced quantity. No new scanner or retention policy. |
 | Collection efficiency | Derived matching-event ratio `PersistedObservations` / Invocations over the same window. For distinct efficiency or compute per observation, deduplicate existing observed normalized records by UUID and align retrieval/execution windows before dividing. | Log duplicates can inflate the metric ratio, even above 100%; do not clamp it or describe it as distinct success rate. Return unavailable for zero denominator or incomplete coverage. Result logs (`collection_id=... status=... retrieved_at=...`) do not cover requests that fail before logging. Cached observations remain valid but are not new source updates. |
 
-## Cost-consumption reference for Issue B
+## Cost-consumption reference
 
-Public dashboard implementation belongs to Issue B. The reference below reuses
+Public dashboard implementation belongs to Issue #11. The reference below reuses
 existing metrics, REPORT logs, normalized evidence and the template. It adds no
 polling, metrics, services or dependencies. **Measured** means an AWS-reported
 sample or stored evidence value; **derived** means arithmetic on those values;
@@ -111,7 +116,7 @@ unavailable values as zero or merge these classifications into a measured bill.
 | S3 storage | Measured daily bucket bytes; derived time-weighted monthly storage = sum(sample GB * covered days) / days in month, with explicit gaps and price-list GB units. Stored raw byte lengths can describe raw payload growth only. | Estimated storage cost = derived GB-month * verified regional Standard storage rate. A latest-size * rate snapshot is a run-rate estimate, not month's consumption. Raw payload bytes omit normalized objects, control data and applicable storage overhead. Artifact buckets are outside the evidence-bucket scope. |
 | S3 GET/PUT operations | Estimated application operations from the execution paths below, optionally informed by deduplicated existing logs and receipts. Exact SDK wire-request and billed-operation totals are unavailable from current evidence; daily object counts do not measure requests. | Estimated request cost = GET attempts / 1,000 * verified GET rate + PUT attempts / 1,000 * verified PUT rate, under stated billing assumptions. Include guard operations, partial writes and comparisons. Retries and error charging prevent equating application calls with charged requests. Do not enable paid S3 request metrics for this estimate. |
 | CloudWatch log ingestion/storage | Measured IncomingBytes over covered windows; derived ingestion GB using price-list units. Retained compressed bytes and time-weighted storage are separate from uncompressed ingestion. | Estimated ingestion cost = GB * verified ingestion rate; estimated storage cost = GB-month * storage rate. Fourteen-day retention limits reconstruction from log records. Query scanning and metric-read costs are separate and unavailable unless the corresponding usage is known; this issue adds no queries. |
-| CloudWatch monitoring resources | Defined resource inventory: two custom metrics and three standard alarm metrics. Derived chargeable resource-month estimates depend on metric emission hours and alarm existence hours. | Estimated full-month baseline is $0.60 metrics + $0.30 alarms at the rates below. This inventory is not measured account usage. Basic AWS metrics are reused; neither the 3-of-5 change nor Issue B's reference adds a metric or alarm. |
+| CloudWatch monitoring resources | Defined resource inventory: two custom metrics and three standard alarm metrics. Derived chargeable resource-month estimates depend on metric emission hours and alarm existence hours. | Estimated full-month baseline is $0.60 metrics + $0.30 alarms at the rates below. This inventory is not measured account usage. Basic AWS metrics are reused; neither the 3-of-5 change nor Issue #11 adds a metric or alarm. |
 | SNS publishes and deliveries | Measured existing `AWS/SNS NumberOfMessagesPublished`, `NumberOfNotificationsDelivered` and `NumberOfNotificationsFailed`, Sum with TopicName for this monitoring topic. Derived covered-window totals; inactive/missing samples remain unknown unless coverage establishes zero activity. | Publish count is not total billed API request units. A scenario estimate uses alarm transitions * confirmed subscribers for deliveries, with publish-size units, failures, retries, tests and subscription changes stated separately. Topic delivery metrics mix protocols if other destinations are added; email-only totals then become unavailable without protocol-specific evidence. Delivery success does not prove an operator read the email. No fixed notification volume is assumed. |
 
 Use the existing [SNS metric definitions](https://docs.aws.amazon.com/sns/latest/dg/sns-monitoring-using-cloudwatch.html)
@@ -121,7 +126,7 @@ pricing references. A subtotal obtained by multiplying measured or derived
 consumption by public list prices is still an **estimated gross cost**. Do not
 call it the billed amount or subtract account allowances from a project subtotal
 as guaranteed savings. Exact invoice cost and remaining credits are unavailable
-without account billing evidence, which is outside Issues #8 and B's reference.
+without account billing evidence, which is outside Issues #8 and #11.
 
 ### S3 request estimation from the current execution paths
 
