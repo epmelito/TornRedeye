@@ -112,6 +112,11 @@ is separately approved and deployed. Removing expiration does not restore
 already deleted evidence. Retention does not protect against privileged manual
 deletion or future lifecycle policy changes.
 
+For separately approved historical evidence export and AWS-independent local
+verification, see [the evidence backup workflow](evidence-backup.md). Offline
+tooling validation does not establish a live backup; export, a stable collector
+cutoff and isolated restoration require their own approvals.
+
 For the Issue #6 retention-only update, preserve the existing EvidenceBucket
 logical ID and physical bucket. Independently review the CloudFormation change
 set before execution: the bucket must update in place, without replacement or

@@ -293,6 +293,10 @@ an approved funded account or a separate approved collection migration.
 
 ## Evidence continuity and recovery requirements
 
+The [evidence backup workflow](evidence-backup.md) documents the Issue #19 offline
+tooling and its manifest/verification contract. It does not establish a completed
+live backup or authorize export, storage, collector pauses or restoration.
+
 Smallest credible backup: an owner-controlled encrypted export on **two
 independent storage copies outside this account**, with separately recoverable
 keys. Private local media is sufficient initially; a second AWS bucket in the
