@@ -472,6 +472,165 @@ may create `baseline/yata-cutoff-20261011.coverage.json` once; routine runs only
 it and require its pinned digest. A self-checksum alone does not establish trust.
 No Azure bootstrap write is provided here; tests build a synthetic local archive tree.
 
+#### One-time offline archive-to-catalog procedure
+
+The existing builder and installed 7-Zip are sufficient; no new repository script
+or dependency is needed. This procedure is preparation, **not evidence that the
+historical bootstrap succeeded**. It needs the actual approved archive already
+present locally. Do not fetch cloud evidence or publish anything in this work package.
+Use a fresh private staging directory outside every Git tree, sufficient free space,
+and a trusted local 7-Zip installation. Keep archive/staging files quiescent and
+access restricted throughout. Local staging is temporary working data, not a third
+persistent backup. Preserve failed staging for diagnosis; no cleanup command is
+provided here.
+
+Run these steps from the repository root in PowerShell. The helpers below capture
+command evidence and fail on nonzero native exit codes. Record their successful
+output separately from Azure; stop on any error, unsupported layout or unexpected
+entry rather than relaxing checks or accepting a partial catalog.
+
+1. Configure local paths, verify the trusted **archive byte hash before extraction**,
+   then inspect its technical member listing. `memberPrefix` is empty when
+   `manifest.json` is at archive root; otherwise set it to the single simple wrapper
+   directory actually shown by `7z l` (for example `yata-cutoff-20261011/`). The real
+   archive layout has not been checked in this work package.
+
+   ```powershell
+   . .\.chatgpt\powershell-helpers.ps1
+   $sevenZip = 'C:\Program Files\7-Zip\7z.exe'
+   $baselineArchive = 'D:\PrivateEvidence\incoming\yata-cutoff-20261011.7z'
+   $bootstrapDirectory = 'D:\PrivateEvidence\bootstrap-20261011'
+   $memberPrefix = '' # set only after reviewing the archive listing
+   $trustedArchiveSha256 = 'E57758215DE330B7F9DB1FD8A75754BA2161764F32824CFB2485BCF639CEF5F8'
+   Invoke-CopyOutput {
+       if ((Get-FileHash -LiteralPath $baselineArchive -Algorithm SHA256).Hash -cne $trustedArchiveSha256) {
+           throw 'Untrusted historical archive; do not extract'
+       }
+       Invoke-NativeCommand -FilePath $sevenZip -ArgumentList @('l', '-slt', '-ba', '--', $baselineArchive)
+   }
+   ```
+
+2. Recheck the hash and validate member names/types before writing any extracted
+   files. Only the historical manifest, inventory pages, object receipts/payloads
+   and their directories are allowed. Reject duplicate/case-colliding names,
+   absolute/traversal paths, links, reparse points, alternate streams, encrypted
+   members and unsupported attributes. These checks intentionally stop on an
+   unexpected layout; they do not sanitize or flatten paths. Bound the listing to
+   210,008 entries (builder defaults: 100,000 objects, two files/object and
+   10,000 inventory pages, plus directories/manifest) and 100 GiB uncompressed (metadata included) before integrity
+   testing/extraction. Do not use `-spf` or overwrite an existing extraction tree.
+
+   ```powershell
+   $bootstrapState = @{ Verified = $false; ExtractionDirectory = (Join-Path $bootstrapDirectory 'extracted') }
+   $privateDirectoryCheck = @'
+   import sys
+   from evidence_backup import _lock
+   with _lock(sys.argv[1]):
+       pass
+   '@
+   Invoke-CopyOutput {
+       if ((Get-FileHash -LiteralPath $baselineArchive -Algorithm SHA256).Hash -cne $trustedArchiveSha256) {
+           throw 'Archive changed; do not extract'
+       }
+       if ($memberPrefix -and ($memberPrefix -cnotmatch '^[A-Za-z0-9_-]+/$' -or
+           $memberPrefix.TrimEnd('/') -match '^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])$')) {
+           throw 'Unsupported archive wrapper'
+       }
+       $listing = @(Invoke-NativeCommand -FilePath $sevenZip -ArgumentList @('l', '-slt', '-ba', '--', $baselineArchive))
+       $records = @(($listing -join "`n") -split '\r?\n\s*\r?\n' | Where-Object { $_.Trim() })
+       if ($records.Count -eq 0 -or $records.Count -gt 210008) { throw 'Archive entry bound exceeded' }
+       $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+       $directories = @('inventory', 'inventory/0', 'inventory/1', 'objects') | ForEach-Object { $memberPrefix + $_ }
+       if ($memberPrefix) { $directories += $memberPrefix.TrimEnd('/') }
+       $filePattern = '^' + [regex]::Escape($memberPrefix) + '(manifest\.json|inventory/[01]/[0-9]{8}\.json|objects/[0-9a-f]{64}\.(json|bin))$'
+       [long]$expandedBytes = 0
+       foreach ($record in $records) {
+           $fields = @{}
+           foreach ($line in ($record -split '\r?\n')) {
+               if (-not $line.Trim()) { continue }
+               if ($line -cnotmatch '^([^=]+) = (.*)$' -or $fields.ContainsKey($Matches[1])) { throw 'Invalid archive listing' }
+               $fields[$Matches[1]] = $Matches[2]
+           }
+           $name = $fields['Path'].Replace('\', '/').TrimEnd('/')
+           if (-not $seen.Add($name) -or ($fields.Keys -match '(?i)Link|Stream|Reparse') -or
+               $fields['Encrypted'] -ne '-' -or $fields['Size'] -cnotmatch '^[0-9]+$') { throw 'Unsafe archive member' }
+           if ($fields['Attributes'] -ceq 'D') {
+               if ($directories -cnotcontains $name) { throw 'Unexpected archive directory' }
+           } elseif ($fields['Attributes'] -cmatch '^([ARHS]+|[ARHS]* -[rwx-]{9})$') {
+               if ($name -cnotmatch $filePattern) { throw 'Unexpected archive file' }
+           } else { throw 'Unsupported archive member type' }
+           $expandedBytes += [long]$fields['Size']
+           if ($expandedBytes -gt 100GB) { throw 'Uncompressed archive bound exceeded' }
+       }
+       if (-not $seen.Contains($memberPrefix + 'manifest.json')) { throw 'Historical manifest missing' }
+       if (Test-Path -LiteralPath $bootstrapDirectory) { throw 'Use a fresh private staging directory' }
+       Invoke-NativeCommand -FilePath python -ArgumentList @('-B', '-c', $privateDirectoryCheck, $bootstrapDirectory)
+       Invoke-NativeCommand -FilePath $sevenZip -ArgumentList @('t', '-bd', '--', $baselineArchive)
+       Invoke-NativeCommand -FilePath $sevenZip -ArgumentList @('x', '-bd', '-y', "-o$($bootstrapState.ExtractionDirectory)", '--', $baselineArchive)
+       if ((Get-FileHash -LiteralPath $baselineArchive -Algorithm SHA256).Hash -cne $trustedArchiveSha256) {
+           throw 'Archive changed during extraction; do not build or pin coverage'
+       }
+       $bootstrapState.Verified = $true
+       Write-Output "archive_preflight=passed members=$($records.Count) expanded_bytes=$expandedBytes"
+   }
+   ```
+
+3. Build only from the resulting verified archive tree. The builder performs the
+   existing historical evidence/relationship validation and refuses incomplete or
+   inconsistent coverage. It writes `catalog/baseline.json` only after validation.
+   Check the exact bytes against the Azure decoder/wrapper and record both hashes:
+   **catalog value digest** is the independent pin for `--baseline-catalog-sha256`;
+   **wrapped file byte hash** and length are for exact upload/readback comparison.
+   Neither is the historical 7z byte hash. Do not serialize the return value alone,
+   add a BOM/newline, or regenerate the file through PowerShell text output.
+
+   ```powershell
+   $catalogBuild = @'
+   import hashlib, json, sys
+   from pathlib import Path
+   import evidence_backup as backup
+   import incremental_backup as coverage
+   import incremental_transfer as transfer
+   extracted, output, archive_hash = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+   value = coverage.build_baseline_catalog(extracted, output_directory=output,
+                                          verified_archive_sha256=archive_hash)
+   artifact = output / 'baseline.json'
+   data = artifact.read_bytes()
+   if data != transfer.wrapped(value):
+       raise SystemExit('Catalog bytes differ from the Azure wrapper contract')
+   pin = backup._digest(value)
+   coverage.validate_baseline(transfer.decode(data), pin)
+   print(json.dumps({'offline_catalog_verification': 'passed', 'bucket': value['bucket'],
+       'baseline': value['baseline'], 'catalog_value_sha256': pin,
+       'wrapped_file_sha256': hashlib.sha256(data).hexdigest(), 'wrapped_file_bytes': len(data),
+       'artifact': str(artifact), 'destination_blob': coverage.BASELINE_CATALOG_BLOB}, sort_keys=True))
+   '@
+   Invoke-CopyOutput {
+       if (-not $bootstrapState.Verified -or (Get-FileHash -LiteralPath $baselineArchive -Algorithm SHA256).Hash -cne $trustedArchiveSha256) {
+           throw 'Successful extraction and unchanged trusted archive required'
+       }
+       $evidenceDirectory = Join-Path $bootstrapState.ExtractionDirectory ($memberPrefix.TrimEnd('/'))
+       $catalogDirectory = Join-Path $bootstrapDirectory 'catalog'
+       Invoke-NativeCommand -FilePath python -ArgumentList @('-B', '-c', $catalogBuild,
+           $evidenceDirectory, $catalogDirectory, $trustedArchiveSha256)
+   }
+   ```
+
+Only a successful actual-archive run establishes the production catalog/pin. Review
+its original source bucket, cutoff, counts and bytes against the approved historical
+record, and retain the observed pin independently of the Azure blob. No production
+catalog digest or inventory measurements are supplied by this preparation.
+
+The later separately authorized live bootstrap must obtain the approved archive,
+run this offline conversion, then create `baseline/yata-cutoff-20261011.coverage.json`
+as a BlockBlob from the **unchanged `catalog/baseline.json` bytes**, using create-only
+publication and independent persisted-byte readback. Verify length/file SHA-256,
+wrapper and the independently recorded value pin; verify an existing destination
+rather than overwriting it. The normal incremental adapter deliberately rejects
+baseline writes: do not relax that guard or use the daily runner as bootstrap.
+Credential/permission setup, publication and cleanup of private temporary staging
+remain outside this package. Keep the historical 7z blob unchanged.
+
 `reconstruct_coverage` consumes the pinned baseline and completed batch manifests
 once into disposable private local JSONL files. It rejects duplicate/conflicting
 revisions and writes `coverage.json` only after every record and partition succeeds.
