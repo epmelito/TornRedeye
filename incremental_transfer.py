@@ -507,7 +507,10 @@ def run_backup(*, s3, azure, bucket, baseline_catalog_sha256, inventories,
             root = Path(temporary)
             with backup._lock(root) as private:
                 runner = Runner(s3, azure, bucket, private, budget)
-                baseline, _ = runner.json_blob(index_api.BASELINE_CATALOG_BLOB, limits.max_manifest_bytes)
+                try:
+                    baseline, _ = runner.json_blob(index_api.BASELINE_CATALOG_BLOB, limits.max_manifest_bytes)
+                except BlobMissing as error:
+                    raise TransferError('verified baseline catalog unavailable; bootstrap required') from error
                 index_api.validate_baseline(baseline, baseline_catalog_sha256)
                 require(baseline['bucket'] == bucket, 'baseline bucket conflict')
                 blobs = runner.enumerate_batches()

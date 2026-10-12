@@ -439,9 +439,10 @@ No restore command, external synchronization or backup schedule is provided here
 
 AWS S3 is primary; Azure Blob is the sole persistent external evidence copy.
 `incremental_backup.py` and `incremental_transfer.py` are offline-testable,
-SDK-free functions with injected clients. No live bootstrap, adapters, credentials,
-scheduler or automation are implemented or activated by this refactor. Run exactly
-one publisher at a time. There is no remote index, mutable root, root snapshot,
+SDK-free functions with injected clients. `incremental_runner.py` adds the thin
+S3/Azure provider adapters and explicitly gated executable described below. No
+live bootstrap, authentication setup, scheduler or automation is implemented or
+activated. Run exactly one publisher at a time. There is no remote index, mutable root, root snapshot,
 compare-and-swap publication or remote index partitioning.
 
 ### Trusted baseline and disposable coverage
@@ -581,6 +582,82 @@ against privileged deletion or forged completion records. Failure to list, parse
 resource limits is visible (`complete=False`, bounded sanitized error and counters).
 A complete job never claims a consistent cutoff. Hard process termination may leave
 private ephemeral scratch for the later runner to clean; it is not a backup copy.
+
+### Offline-tested operational entry point (Slice 3)
+
+`python -B incremental_runner.py --help` is safe offline: imports are standard
+library plus the engine, and no client or credential resolution occurs. The
+executable requires `--bucket`, `--owner` (12-digit expected AWS bucket owner),
+`--region`, `--azure-account`, `--azure-container`,
+`--baseline-catalog-sha256` (independently pinned lowercase catalog value digest),
+`--scratch-parent` (private directory outside Git) and separate live approval via
+`--live-access-approved`. The flag is an execution gate, not authorization by itself.
+Do not run live in this slice. `--max-seconds` defaults to the one-hour soft limit;
+engine object, batch, transfer and scratch bounds remain unchanged.
+
+The CLI emits one JSON result and exits zero only for `complete=True`; failures,
+incomplete inventories and unresolved prepared intents exit one. Argument parsing
+errors exit two. Diagnostics expose controlled messages/status codes or exception
+class names, never provider error bodies, arbitrary SDK messages or SAS values.
+The existing private-directory writer lock is held across execution, preventing
+concurrent CLI writers sharing that scratch path. Different paths/hosts still
+require external serialization; there is no remote coordination.
+
+The S3 adapter uses the project's existing external boto3 convention; no package
+or dependency is installed by this slice. Only the explicitly gated client factory
+imports boto3 and resolves already available AWS credentials. It configures 10-second
+connect and 30-second read timeouts and one SDK attempt. Engine GET retries and
+adapter LIST retries each allow three counted attempts; no additional adapter GET
+retry loop exists. Both prefixes stream from the beginning with MaxKeys=1,000,
+continuation tokens and terminal empty pages. Every LIST/GET includes
+ExpectedBucketOwner; GET forwards the engine's IfMatch and original response/body,
+including content type, user metadata, opaque ETag, LastModified and version ID.
+Unknown errors/403/404/412 are permanent failures; transport errors and recognized
+transient statuses can retry. Truncated source streams never establish coverage.
+
+The Azure adapter uses standard-library HTTPS and Azure public-cloud Blob REST
+version 2019-12-12, with an existing URI-encoded SAS supplied externally in
+`TORNREDEYE_AZURE_SAS`. It does not generate, renew, provision or log credentials.
+The token must already permit required container listing, evidence reads and
+create-only writes; bootstrap/authentication permissions are a later work package.
+There is no Azure SDK dependency. Account/container configuration fixes the HTTPS
+host and path. Redirects are rejected. LIST uses container comp=list, canonical
+incremental prefix, maxresults and marker, then validates bounded XML; GET exposes
+a closable bounded stream and requires content length, ETag and BlockBlob headers.
+PUT streams <=64 KiB chunks with known Content-Length, x-ms-blob-type=BlockBlob
+and If-None-Match=* in a single request. It never stages blocks, overwrites evidence,
+replaces a root or modifies baseline blobs. Only BlobNotFound maps to an absent
+object; container-not-found/authorization errors remain failures. Only the expected
+create conflict codes map to existing-object verification. A lost PUT acknowledgement
+continues through the engine's persisted-byte readback; provider success alone
+still cannot establish coverage.
+
+A missing baseline catalog fails explicitly with `bootstrap required` before any
+S3 listing or transfer. A present catalog with the wrong independently supplied
+pin fails closed. The compact catalog is read, never initialized or uploaded.
+The historical archive is not downloaded, extracted or uploaded by the entry point.
+Prepare the verified compact catalog
+through a separately approved historical bootstrap before live use.
+
+S3 LIST attempts are bounded to 262,144 across both prefixes/retries. Accepted
+saved-format listing metadata is capped at 4 MiB/page and 4 GiB/run; the reported
+`source_inventory.serialized_bytes` is canonical page size, **not measured AWS
+wire bytes**. The CLI populates `operations.s3_list` with counted adapter attempts.
+boto3 parses LIST responses before this application check. Azure XML
+responses are capped at 8 MiB/page, with actual consumed response bytes reported
+separately from the engine's streamed-body transfer counters; the existing 64-LIST
+attempt cap bounds this additional traffic to approximately 512 MiB (plus a
+one-byte oversize probe per failed page). XML declarations with DTD
+or entities are rejected. SDK credential discovery/region redirect behavior is
+outside application request counters and needs validation before live approval.
+Transport timeouts are inactivity limits and runtime checks are soft between
+operations; they do not forcibly interrupt a stalled/drip-fed SDK or socket call.
+
+Validation uses fake SDK clients and fake HTTPS connections exclusively. Provider
+response formats, pagination, error mapping, bounded streams, conditional writes,
+source ownership, baseline failure, entry-point exit codes, corrupt readback,
+lost acknowledgement and verified restart are exercised offline. Public-cloud REST
+interoperability and configured credential permissions remain unverified live.
 
 ### Resource bounds and cost comparison
 
