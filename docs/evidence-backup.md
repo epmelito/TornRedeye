@@ -435,403 +435,261 @@ stale polling control or clear a halt automatically; use
 [deployment recovery safeguards](deployment.md#polling-safeguards-and-recovery).
 No restore command, external synchronization or backup schedule is provided here.
 
-## Offline partitioned coverage (Issue #23, Slice 1)
+## Incremental backup: immutable batch completion (Issue #23)
 
-`incremental_backup.py` replaces the monolithic planner with one bounded shard
-at a time. It provides no SDK, network operations, archive extraction, evidence
-transfer, credentials or scheduling. The collector and baseline remain unchanged.
+AWS S3 is primary; Azure Blob is the sole persistent external evidence copy.
+`incremental_backup.py` and `incremental_transfer.py` are offline-testable,
+SDK-free functions with injected clients. No live bootstrap, adapters, credentials,
+scheduler or automation are implemented or activated by this refactor. Run exactly
+one publisher at a time. There is no remote index, mutable root, root snapshot,
+compare-and-swap publication or remote index partitioning.
 
-### Baseline trust and recovery
+### Trusted baseline and disposable coverage
 
-`build_baseline_index(directory, index_directory=..., verified_archive_sha256=...)`
-consumes a safely extracted, quiescent `evidence_backup.py` directory. The later
-approved bootstrap must verify the downloaded archive **before extraction**
-against trusted SHA-256
-`e57758215de330b7f9db1fd8a75754ba2161764f32824cfb2485bcf639cef5f8`.
-The argument attests to that check; it cannot establish extraction origin.
+The original `baseline/yata-cutoff-20261011.7z` remains unchanged. Its trusted
+SHA-256 is `E57758215DE330B7F9DB1FD8A75754BA2161764F32824CFB2485BCF639CEF5F8`.
+During a separately authorized one-time bootstrap, verify the archive hash before
+safe extraction, then call `build_baseline_catalog(extracted_directory,
+output_directory=private_directory, verified_archive_sha256=trusted_hash)`.
+The hash argument attests to that prior check; it cannot check an unavailable archive.
 
-Construction verifies both completed inventories, UTC cutoff, page digest/token
-chains, every verified receipt, exact payload hash/length and metadata consistency.
-Raw relationships must be `normalized_receipt_present` or
-`no_normalized_local_receipt`. Normalized relationships must be `raw_link_verified`
-or `no_raw_link`. Every other outcome is rejected, including missing/unverified
-raw counterparts, unreadable/malformed links, mismatches and links unassessed
-because of the verification size bound. Legitimate raw-only evidence and
-normalized failure records without a raw link remain valid.
-Missing, corrupt, prepared or unindexed evidence is rejected. It publishes the
-root only after all baseline verification and 256 shard writes succeed. Failed
-builds have no usable root; preserve diagnostics and restart in a fresh directory.
-The one-time baseline limits remain 100,000 objects, 10,000 pages and 100 GiB of
-payloads; these do not limit ongoing incremental growth.
+The builder reuses historical inventory-page, receipt, content and relationship
+verification. Raw relationships must be `normalized_receipt_present` or
+`no_normalized_local_receipt`; normalized relationships must be `raw_link_verified`
+or `no_raw_link`. Missing, unverified, malformed, mismatched and unassessed links
+fail closed. Raw-only evidence and normalized failure records with no link remain
+valid. Missing/inconsistent pages, receipts, payloads, extra unindexed evidence,
+invalid totals or incomplete inventories cannot establish a baseline catalog.
 
-Original bucket/key, content type, all user metadata, optional source version ID,
-listing fields, SHA-256 and byte length remain in the archive's full receipts.
-The index references those records instead of duplicating their metadata. Recovery
-requires the unchanged baseline plus all referenced immutable incremental batches
-and receipt manifests; preserve embedded original source identities. There is
-no migration of the discarded version 1/2 derived index; rebuild this derived index from
-the verified baseline before later transfer work.
+The compact `baseline.json` contains source bucket, both prefixes, archive identity,
+cutoff, counts, bytes and rows `[kind, uuid_hex, revision, content_sha256, byte_length]`.
+Original content type, all user metadata, timestamps, source ETag/version ID and
+original archive-member references remain in the verified archive's receipts.
+Key and receipt-member names are deterministically recovered from each compact row.
+Pin the catalog value digest independently after verification. A future bootstrap
+may create `baseline/yata-cutoff-20261011.coverage.json` once; routine runs only read
+it and require its pinned digest. A self-checksum alone does not establish trust.
+No Azure bootstrap write is provided here; tests build a synthetic local archive tree.
 
-### Version 3 index schema
+`reconstruct_coverage` consumes the pinned baseline and completed batch manifests
+once into disposable private local JSONL files. It rejects duplicate/conflicting
+revisions and writes `coverage.json` only after every record and partition succeeds.
+Returned values do not permit modification of authoritative persisted input.
+Local partitions use the UUID's first byte to bound memory, retaining the tested
+256-way local routing: five-year growth averages 20,550 records per partition,
+versus 5.26 million in a full in-memory catalog. These files have no remote
+publication/retention contract and can be discarded and rebuilt at every restart.
 
-All files use the existing canonical JSON `{value, sha256}` checksum wrapper.
-Checksums detect accidental corruption, not forgery; trust the index's origin and
-keep the local snapshot quiescent during a sweep.
+### Complete reconciliation and transfer
 
-`index.json` holds `schema_version=3`, source `bucket`, the two canonical
-`prefixes`, baseline cutoff/count/bytes, a `batches` map and **all 256** shard
-descriptors. Each descriptor stores its exact immutable `location`
-(`shards/hh/<value-sha256>.json`), shard value checksum, record count,
-baseline object count and baseline byte total. Totals must match the baseline.
-A root read alone does not verify the referenced shard files. Batch identifiers
-use 1 to 64 ASCII letters, digits, dots, underscores or hyphens. Blob/member
-references are bounded to 1,024 UTF-8 bytes and reject path traversal components.
+`run_backup(s3=..., azure=..., bucket=..., baseline_catalog_sha256=...,
+inventories=..., limits=Limits(), scratch_parent=private_ephemeral_directory)`
+loads the pinned catalog, enumerates batch metadata, resumes pending uploaded
+batches, reconstructs coverage, plans both complete canonical prefixes and transfers
+new/detectably changed revisions. Listing inputs use the historical saved-page format:
+`request_token`, `next_token`, `objects` with key, size, ETag and UTC LastModified.
+They must start at the beginning and terminate for both prefixes. UUID ordering,
+LastModified watermarks and the historical cutoff never exclude source objects.
 
-Each referenced shard revision holds version, bucket, shard ID and `entries`.
-Readers use the root's location, require its content-addressed path to match the
-checksum/shard ID, and verify both wrapper and descriptor checksums. Each compact entry
-is `[kind, uuid_hex, revision_fingerprint, batch_id]`:
+The planner compares listing descriptors without HEAD requests for unchanged
+objects. It distinguishes apparently unchanged covered revisions, new objects,
+changed revisions and previously covered revisions no longer visible. Terminal
+empty prefixes are valid observations, not failures; empty iterators, broken token
+chains, unknown key formats, duplicates, interrupted or over-limit sweeps fail
+closed. No new source transfer follows an incomplete sweep. Full-prefix live
+listings are provisional, not consistent-cutoff evidence, even when complete.
+ETags are opaque revision signals, not content hashes; undetectable privileged
+metadata/content mutation is outside this guarantee.
 
-- `kind` is `r` (raw `.bin`) or `n` (normalized `.json`).
-- `uuid_hex` is exactly 32 lowercase hexadecimal characters; `hh` is its first
-  two characters. Accept any UUID version because `persist` accepts UUID objects;
-  the live handler generates UUIDv4. Unknown/nested/uppercase key formats fail.
-- The fingerprint is SHA-256 of canonical JSON containing **listing** size,
-  opaque ETag and normalized UTC LastModified. It is a revision-comparison digest,
-  **not** a content checksum or guarantee against privileged mutation.
-- `baseline` refers to the trusted unchanged archive. Derive the full receipt
-  member as `objects/<SHA-256(original source key)>.json`; its existing receipt
-  verifies the corresponding `.bin` payload.
-- Incremental batches have kind `increment`, immutable `incremental/` blob name,
-  verified batch SHA-256 and a `receipts_member` path. That receipt manifest maps
-  `kind/uuid_hex/revision_fingerprint` to the full verified receipt and payload
-  reference. Many objects may share one archive/batch; no per-object Azure
-  metadata blob is required. The Slice 2 transfer publisher verifies manifest
-  identities, payloads and destination integrity before adding index coverage.
+Transfer retains conditional S3 `IfMatch` reads and checks returned size, ETag,
+LastModified, available full-object checksum and raw metadata SHA-256. Streams hash
+exact bytes, including empty bodies, without normalization. Original identity,
+content type, all string user metadata, version ID and listing/read provenance are
+stored in `receipts.json` inside a deterministic uncompressed ZIP. Raw and normalized
+objects do not need counterparts. Greedy batches cross local partitions and respect
+object-count and byte bounds.
 
-Different preserved revisions may share a source key. Duplicate identities,
-conflicting baseline revisions, unknown batches, missing records, wrong-shard
-entries and mismatched descriptor checksums fail closed on shard read. Existing
-baseline entries are retained when incremental revisions are appended. Index
-publication after live transfers remains outside Slice 1.
+Batch identity is SHA-256 of source bucket and sorted `kind/uuid/revision` references.
+Destination names are:
 
-`stage_shard_revision` validates and flushes a shard, then publishes its exact
-content-addressed location using a no-overwrite hard link. An existing location
-is reusable only if its checksummed contents match exactly. Changed shards get
-new locations; unchanged revisions can be reused. `publish_index` verifies all
-256 referenced shard revisions and baseline totals before atomically replacing
-local `index.json`. An interrupted stage or publication before root replacement
-leaves the previous root readable. Readers holding an older root snapshot still
-resolve its unchanged shard revisions after a later root commits. No full-catalog
-copy is needed. Local publication requires a single writer and uses the existing
-lock/fsync/atomic replacement contracts; it does not claim power-loss guarantees
-beyond the filesystem or implement Azure conditional root publication.
+- `incremental/batches/<batch>.zip.prepared.json`: immutable original size, ZIP
+  SHA-256 and embedded receipt-manifest digest, created and readback-verified first.
+- `incremental/batches/<batch>.zip`: create-only original payloads and full receipts.
+- `incremental/batches/<batch>.zip.verified.json`: compact schema-2 completion,
+  containing the prepared values, source bucket, `destination_verified` status and
+  five-column coverage rows derived from independently verified persisted receipts.
 
-Replacement `publish_index` requires an existing valid committed root. It
-validates the old and candidate snapshots one shard at a time, preserving the
-source identity, baseline cutoff/count/bytes/archive reference, each shard's
-baseline byte totals, and every existing batch descriptor. Every committed entry
-must remain unchanged, including its revision fingerprint and batch assignment.
-No new entries may claim historical baseline coverage. Only new verified
-incremental batches and revisions may be appended. A rejected replacement leaves
-the committed root and its immutable revisions untouched. Initial baseline
-construction remains a separate bootstrap, not a replacement-publication bypass.
-The comparison retains at most two bounded shard entry sets plus the small root
-snapshots, never a global catalog. The offline injected-client Slice 2 layer below
-verifies new evidence and implements conditional Azure root publication; live
-adapter wiring remains later work.
+Every metadata document uses the existing canonical `{value, sha256}` wrapper.
+ZIP upload success is insufficient: read persisted bytes back, hash and compare
+length/SHA-256, then validate exact regular ZIP members, embedded receipt checksum,
+source mappings, metadata and each payload length/hash. The persisted-stream hash
+is reused for outer ZIP verification; it is not redundantly recomputed. The
+original archive hash is also reused across prepared-intent and upload verification. Recovery
+from a local archive independently hashes the whole file when no stream observation
+is supplied. A completion is create-only and readback-verified only after all evidence
+checks succeed. Conflicting ZIPs, intents or completions are never overwritten.
 
-Superseded/unreferenced index metadata requires bounded retention and cleanup
-in the later Azure integration. Retain revisions referenced by committed roots,
-active readers and pending publication/recovery work until a separately reviewed
-metadata retention policy permits cleanup. This requirement authorizes no evidence
-deletion or cloud cleanup now. Immutable baseline/incremental evidence is separate
-from disposable index metadata.
+### Enumeration, interruptions and recovery
 
-### Full-prefix sweep and interruption
+The Azure adapter must provide bounded-timeout/no-hidden-retry `open_blob`,
+create-only `create_block_blob` and complete lexicographic `list_blobs(prefix,
+continuation_token, page_size)` results with `blobs` (name, byte size) and `next_token`.
+Enumeration uses 5,000 names/page, validates token chains, names, counts and sizes.
+Normal startup GETs only the baseline catalog and each compact completion once.
+Every completed ZIP must be listed with the expected byte size; routine startup
+does not repeatedly download old ZIPs, full receipts or prepared intents.
+Completions are trusted-writer records authenticated by access controls, not signatures
+or proof against a privileged writer. Same-size corruption after verification is
+found during recovery verification, not every daily reconciliation.
 
-`plan_reconciliation(index_directory, inventories, output_directory=...)` consumes
-one iterable of saved-format inventory pages for **each complete canonical
-prefix**, starting from token `None`. Pages have `request_token`, `next_token`
-and `objects` with `key`, `size`, `etag`, `last_modified`. Supply streaming page
-iterables; do not materialize a whole source inventory in the caller. Require ordered unique
-keys, consistent token chains, and a terminal page even for an empty prefix.
-Do not feed only narrow shard listings: they can hide unknown source key formats.
+An uploaded ZIP with a prepared intent but no completion is independently readback
+verified against that original intent and its embedded receipts, then completed.
+This survives changed batch composition or source disappearance without re-fetching
+historical source bytes. An intent without a ZIP establishes no coverage and is
+reported as unresolved; matching current candidates may retry it. The result
+reports the remaining `pending_intents` after verified completions in the current
+run, including newly prepared batches. Any remaining intent prevents `complete=True`,
+even when the current source sweep succeeds or newer revisions are backed up. A
+different batch composition does not resolve the original immutable intent. No
+automatic deletion or abandonment is performed. A ZIP with neither
+intent nor completion is ambiguous and fails closed. Retry attempts count against
+limits, including unsuccessful reads/writes; lost upload acknowledgements verify the
+persisted object before retrying. A failed later batch cannot invalidate earlier
+immutable completions. An uncertain completion acknowledgement remains recoverable
+at the next complete enumeration. Do not silently repair or delete conflicting evidence.
 
-The planner validates and routes observations to disposable per-shard JSONL
-scratch files, then reads and reconciles one coverage/observation shard at a time.
-It does not build or copy a growing global catalog. The returned summary has only
-256 shard descriptors/counters; detailed results remain in per-shard output files.
-All index/source inputs are read-only, and returned values have no mutable aliases
-into inputs. Keep private temporary index/planning files outside Git; do not
-retain them in GitHub artifacts or caches as another persistent evidence copy.
+For demonstrable recovery, verify the baseline archive's trusted hash and safely
+extract/verify its historical contracts. Enumerate and validate compact completions;
+for each increment, call `Runner.inspect_archive(path, completion)` without a supplied
+stream observation. It verifies ZIP size/SHA-256 and matches derived coverage rows
+to the completion. Recover original bytes and full provenance from
+those receipts. Preserve every source revision and distinguish unavailable current
+source from recovery loss. Baseline plus all verified increments is the recovery set.
+Do not read only the latest day's batch. No persistent local archive or third provider
+is introduced. Previously committed remote index metadata is not used; no migration,
+cloud cleanup or evidence deletion is authorized or performed here. Any existing
+schema-1 verified receipts require a separately reviewed conversion through actual
+persisted-archive verification; they cannot be silently trusted as schema-2 coverage.
 
-A plan shard counts apparently unchanged `already_covered` revisions, lists `new`
-and `changed` transfer candidates, and references preserved revisions
-`previous_revision_not_visible` in the current listing. Matching any verified
-preserved revision avoids transfer. Absent raw/normalized counterparts do not
-block independent coverage. Disappearance never deletes preserved evidence.
+A complete enumeration is not a globally atomic multiwriter snapshot. The former
+root/CAS ordering guarantee is deliberately removed; serialize the publisher and
+keep evidence/manifest writes create-only. The later Azure integration must exclude
+these artifacts from deletion/expiry and authenticate the writer. With no retained
+root/history authority, disappearance of every artifact of a batch cannot be
+detected from enumeration alone; neither checksums nor create-only writes protect
+against privileged deletion or forged completion records. Failure to list, parse, validate or fit
+resource limits is visible (`complete=False`, bounded sanitized error and counters).
+A complete job never claims a consistent cutoff. Hard process termination may leave
+private ephemeral scratch for the later runner to clean; it is not a backup copy.
 
-`complete=True` requires both prefix scans and **every** shard to succeed. The
-planner always reports `consistent_cutoff=False`: a live scan is provisional,
-not a point-in-time snapshot. Incomplete sweeps report their error and completed
-work; `read_plan_shard` refuses classifications until the whole sweep completes.
-Interrupted output is diagnostic, not a resume cursor. Restart both prefix scans
-in a fresh output directory; independently verified index coverage survives.
-Never skip by UUID order, timestamps or the historical cutoff. ETags are not
-content hashes; metadata-only or other undetectable mutations remain possible.
+### Resource bounds and cost comparison
 
-### Capacity and operational limits
+Assessment performed before source edits on 2026-10-12. This is a modeled comparison,
+not live inventory or an invoice. Inputs: documented 4,782 historical objects;
+one-minute cadence gives an estimated 2,880 additional objects/day; 365 days/year;
+uniform UUID routing, no extra changed revisions, one new batch/day and all 256 old
+remote partitions changing. One batch/day requires daily payload <=64 MiB and <=4,096
+objects: actual payload sizes are unknown and may require more batches. Preserve
+explicit B (new batches), C (prior completed batches), S (old changed-partition writes),
+P (new payload bytes), Z (new ZIP bytes including full receipts), M (old current index
+bytes), U (old changed partition bytes) and H (all compact completion bytes).
 
-The default design horizon is **five years** at 2,880 new objects/day, beginning
-with 4,782 baseline objects: 5,260,782 objects, averaging 20,550 per shard under
-uniform UUIDv4 distribution. The per-shard limit is 65,536 source objects and
-65,536 preserved index revisions: round up three times the five-year mean to the
-next power of two. Extra historical revisions consume this same capacity.
-Distribution skew and changes can exhaust a shard sooner; no unlimited-growth
-or exact time-to-exhaustion guarantee is made.
+A synthetic five-column completion row is 180 serialized bytes including separator;
+old compact tuples were about 175 bytes for a 64-character batch ID. Projected old
+current metadata uses the documented baseline model `M0=620258` plus `175*2880*d`.
+New metadata uses `180*2880*d`, ~0.86 MB baseline rows plus bounded headers (~0.55 KB
+per batch). These are decimal MB/GB; price conversion uses the provider's billing
+units. Metadata user fields live inside ZIPs once, not repeated in daily coverage
+GETs. Full ZIP receipts/overhead, unchanged in both designs, are additional storage.
 
-Defaults retain 16 MiB limits for each serialized index shard and observation
-partition, 4 MiB for root metadata, 8,192 immutable batch references, 262,144
-source pages, 4 GiB total source spool, 4 GiB total result-shard output, and a
-soft one-hour runtime limit. Result shards allow 64 MiB because changed/missing
-revision reports are larger than compact index entries. Inputs/outputs must be
-fresh, private directories. A metadata bound may be reached before a record
-bound. Limits never authorize silently dropping evidence; failures remain
-incomplete. Runtime checks cannot preempt a blocking caller iterator or filesystem
-operation. A page-limit failure may consume one additional supplied page.
+| Modeled daily resource | Previous remote catalog | Completion manifests |
+| --- | --- | --- |
+| S3 LIST attempts | sum over prefixes ceil(objects/1000), at least one per prefix | unchanged |
+| S3 GETs | new/changed objects plus retries | unchanged |
+| Azure PUT attempts | `1+5B+S` | `3B` |
+| Azure GET attempts | `258+6B+S` | `1+C+4B` |
+| Azure LIST attempts | none for catalog startup | ceil(batch artifact names/5000), at least one |
+| Azure outbound metadata bytes | approximately `M+U` plus roots/intents/proofs | `H+baseline` plus new intent/completion readbacks |
+| New ZIP upload and Azure readback bytes | `Z` each direction | unchanged |
+| Retained catalog metadata | accumulated immutable partition/root revisions | one compact completion per batch; no rewritten catalog |
 
-Synthetic measurements on 2026-10-11, using 14-character daily batch IDs and
-paired raw/normalized UUIDs (decimal MB/GB below; limits above use MiB/GiB):
+For B=1/S=256, writes fall **262 to 3/day**. GETs change from 520/day to ~370 at
+year one and ~1,830 at year five. Three artifact names/batch imply ~1 and ~2 LIST
+pages respectively (pending artifacts increase this). AWS requests remain ~1,056
+LIST + 2,880 GET/day at year one and ~5,262 LIST + 2,880 GET/day at year five.
 
-| Scenario | Records/shard | Serialized shard | Peak traced allocations | Measured core time | Projected total index | Daily read + full rewrite |
-|---|---:|---:|---:|---:|---:|---:|
-| One year | 4,125 | 0.516 MB | 7.2 MB | ~0.5 s | 132 MB | 264 MB |
-| Five years | 20,550 | 2.57 MB | 34.6 MB | ~2.8 s | 658 MB | 1.32 GB |
-| Configured boundary, unchanged | 65,536 | 8.19 MB | 112 MB | ~8.8 s | n/a | n/a |
-| Boundary, every revision changed, 64-character batch ID | 65,536 | 11.47 MB | 245 MB | ~12.8 s | n/a | n/a |
+| Projected quantity | Year one | Year five |
+| --- | --- | --- |
+| Objects | 1,055,982 | 5,260,782 |
+| Old current metadata GET | 184.6 MB/day | 920.4 MB/day |
+| New baseline/completion metadata GET | ~190 MB/day | ~948 MB/day |
+| Old metadata Azure outbound, including partition readback | ~369 MB/day | ~1,841 MB/day |
+| New metadata Azure outbound, including small new proof readbacks | ~190 MB/day | ~948 MB/day |
+| Old retained immutable partition metadata, no cleanup | ~33.9 GB | ~840.9 GB |
+| New retained compact coverage metadata | ~0.19 GB | ~0.95 GB |
 
-The changed-boundary report serialized to 52 MB, below the 64 MiB report limit.
-A separate bounded filesystem sweep of 20,550 synthetic objects successfully
-processed all 256 shards in ~10.8 s under tracing, with ~35 MB peak allocations,
-3.37 MB source spool and 59 KB result-shard output. This is a local measurement,
-not a five-year end-to-end timing guarantee. Reserve at least 512 MiB of worker
-allocation headroom plus interpreter/OS/caller overhead; `tracemalloc` is not RSS
-and the code enforces count/byte budgets rather than a hard memory quota.
+Thus startup metadata alone rises ~3%, while total daily Azure metadata outbound
+falls ~49%; savings are not merely fewer writes hiding full historical receipt
+GETs. Retained old metadata is `sum(M0+175*2880*t, t=1..d)` assuming all partitions
+rewritten daily and no cleanup; roots add further bytes. With many smaller batches,
+new GET/header counts grow as C, whereas old partitions may be rewritten more than
+once/day. Neither design downloads historical payloads during a normal run. Evidence
+storage is `baseline + sum(Z)` in both, not just compact metadata. AWS-to-runner
+transfer is P plus listing bytes; runner-to-Azure upload is Z; Azure outbound includes
+Z readback and coverage metadata. Runner-region/provider outbound charges, retrieval
+tier charges, allowances, retries and billing-meter rounding must be priced separately.
 
-Total index estimates multiply the measured compact entry size by projected
-object count and add shard headers. Add the small root/batch table; these figures
-exclude payloads and full receipt manifests. Projected five-year source spool is
-~863 MB. Three times the five-year mean leaves room for modest skew and extra
-revisions, but skewed imports, accelerated cadence, unusually long fields or
-frequent source mutations require another capacity check. Full-prefix scan work
-and compact index I/O still grow linearly with retained history.
+Use the dated 2026-10-11 Stockholm AWS evidence/units above, not invented rates:
+LIST `$0.005/1000`, Standard GET `$0.0004/1000`. The modeled LIST+GET request
+subtotal is ~$0.006432/day at year one and ~$0.027462/day at year five, unchanged
+by this refactor and excluding transfer/retries. Standard source storage remains
+`source_GB_month * $0.023`; chargeable ordinary internet transfer uses the above
+`$0.09/GB` first-tier planning rate and allowances. These dated prices require
+recheck before live operation. Authoritative references are [AWS S3 pricing](https://aws.amazon.com/s3/pricing/)
+and the regional offers above; [Azure Blob pricing](https://azure.microsoft.com/en-us/pricing/details/storage/blobs/)
+sets tier/region/redundancy-dependent storage and per-10,000 transaction pricing.
+No Azure rate is asserted: account region, tier, redundancy, outbound destination,
+allowances and runner provider remain unverified.
 
-`tests/test_incremental_backup.py` contains reproducible bounded synthetic
-measurements for one-year/five-year representative shards and the capacity
-boundary. Measurements include fixture allocation, serialization/decoding,
-validation and reconciliation under `tracemalloc`; they are not live evidence
-measurements, RSS guarantees or cloud timing measurements. Total index and daily
-transfer estimates are projections, not observed bills. Full provenance receipts
-are stored once in immutable batches. A daily sweep reads the compact
-index once, with one rewrite per affected shard per committed transfer batch;
-never fetch/rewrite it for every page or object. Read plus full-rewrite estimates
-are conservative when every shard changes; unchanged shards need no rewrite.
-Capacity review must consider revision counts, serialized/spool sizes and runtime
-before limits are approached. Adjust bounds only after representative validation.
+With Azure rates r_get/r_put/r_list per 10,000 operations, r_out per chargeable
+billing GB and r_store per GB-month, price each design as:
+`GET*r_get/10000 + PUT*r_put/10000 + LIST*r_list/10000 + outbound_GB*r_out + retained_GB_month*r_store`.
+At five years, extra ~1,310 reads/day trade against ~259 fewer writes/day, two LIST
+requests and ~0.89 GB/day less metadata outbound plus much less retained metadata.
+If all outbound/storage differences are free, transaction savings alone depend
+on r_put/r_get being above ~5.1 (plus LIST charges). Total savings cannot be stated
+without actual rates. This bounded request increase does not create disproportionate
+metadata downloads; no additional remote index is needed. An interrupted uploaded
+batch adds prepared GET + ZIP GET + completion PUT/readback, without a source GET
+or ZIP re-upload. A prepared-only retry may re-fetch that bounded batch; failures
+before the intent persists may repeat source reads. Price every actual attempt.
 
-Final review corrections on 2026-10-12 leave compact entry sizes, partitioning,
-resource limits and the five-year growth assumptions unchanged. Schema version 3
-adds approximately 24 KB of immutable locations to a 256-shard root (about 48 KB
-extra for one root read plus rewrite). Publication adds one bounded local
-verification pass over referenced shards before committing the root; this does
-not require fetching each shard repeatedly from Azure. Prior core scalability
-measurements above remain representative; current offline suites repeat them.
+Defaults: 16 MiB/object, 4,096 objects and 64 MiB payload/batch, 128 MiB ZIP,
+16 MiB metadata document, 4 GiB private scratch, 8 GiB streamed body transfer,
+8,192 S3 GET attempts, 8,192 Azure GET attempts, 64 Azure LIST attempts,
+1,024 Azure PUT attempts, three attempts/request, one-hour soft deadline.
+The raised read-attempt bound covers ~four batches/day over five years (7,300
+completion reads plus bootstrap/new work); it is not unlimited growth. All client
+requests need bounded transport timeouts and listing-response byte accounting; a blocked adapter cannot be stopped by
+between-operation deadline checks.
 
-## Offline incremental transfer (Issue #23, Slice 2)
+Local coverage/source limits are 65,536 records/objects per partition, 16 MiB
+partition files, 64 MiB result partitions, 262,144 source pages, 8,192 batch references
+and a 4 MiB local summary. Revisions, UUID skew or large batch-header tables can hit
+limits sooner than the modeled horizon. The unified run allocates thirds of scratch
+for coverage, source spool and plan; retained derived files count against transfer
+scratch too. Coverage rows with batch IDs are ~247 bytes, so year-five local coverage
+is ~1.30 GB; missing/changed result volume may reach the scratch bound and visibly
+fail. Do not claim arbitrary full five-year disaster enumeration fits a daily-run
+budget. The focused memory test measures a five-year representative partition and
+the 65,536-record changed boundary; the first focused run measured ~41.3 MB traced allocation for 20,550 changed
+records and ~133.3 MB at the 65,536-record changed boundary. These are Python
+allocations on this workstation, not process RSS or a live service measurement.
 
-`incremental_transfer.transfer_plan(s3=..., azure=..., index_directory=...,
-plan_directory=..., limits=Limits(...))` consumes a complete Slice 1 plan. It
-returns `complete`, `error`, independently `verified_batches`, confirmed
-`committed_batches`, and charged request/traffic counters. Completion remains
-provisional (`consistent_cutoff=False`). Failed later batches retain earlier
-committed progress. Configuration errors raise before execution; execution
-failures return incomplete with sanitized diagnostics. No SDK, credentials,
-live command, bootstrap, scheduling or provider configuration is implemented.
-
-The caller supplies a trusted private committed index cache and exclusive local
-writer ownership. Remote roots must extend that cache under Slice 1 append-only
-validation. All 256 remote referenced shards are read and checksum-validated;
-any remotely added coverage requires independently reading and verifying its
-incremental archive and receipt before the cache advances. This trust anchor
-cannot be bootstrapped from an arbitrary unverified remote root. Historical
-baseline download/SHA-256 checking/safe extraction remain separate later work.
-Keep cache and planning metadata outside Git and temporary payload scratch on
-the same filesystem as the cache; scratch is removed on success or failure.
-Never put payloads in GitHub artifacts/caches or retain a local evidence archive.
-Abrupt process termination can leave private temporary files; a future worker
-needs bounded local scratch cleanup before restart, separate from Azure evidence
-retention. Ordinary returns and exceptions clean this run's scratch.
-
-### Adapter and source contract
-
-The injected S3 client supplies `get_object(Bucket, Key, IfMatch)` compatible
-with the existing export client. Fetch only new/changed listed revisions,
-conditioned on their opaque ETag. Returned size, ETag and UTC LastModified must
-match the planned listing fingerprint. Preserve content type, every string user
-metadata field, source bucket/key, observed timestamps, ETag and optional version
-ID. Hash exact streamed bytes, enforce declared length, validate raw `sha256`
-metadata when present and returned S3 SHA-256 when explicitly FULL_OBJECT.
-Zero-length bodies and absent raw/normalized counterparts are valid. ETags are
-not hashes; conditional reads cannot detect every privileged or metadata-only
-mutation. Optional S3 checksums depend on the adapter response and permissions;
-they supplement local hashing, not replace it. See [AWS GetObject](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html)
-(consulted 2026-10-12).
-
-The Azure adapter supplies these narrow operations, with bounded transport
-connect/read timeouts and no hidden retries. Each method represents one provider
-HTTP request (GET or single Put Blob); future multipart SDK adapters must expose
-and charge their additional requests before use:
-
-- `open_blob(name) -> BlobRead(body, size, etag)`, with reads bounded by 64 KiB;
-- `create_block_blob(name, stream, size)`, `BlockBlob` with `If-None-Match: *`;
-- `replace_root(name, stream, size, etag)`, atomic **If-Match: etag**, only for
-  `index/index.json`.
-
-Upload streams require explicit positive reads of at most 64 KiB. Normalize only
-actual not-found to `BlobMissing`, create conflict to `BlobExists`, and failed
-root precondition to `RootChanged`; authorization errors are not absence. Future
-adapters must be tested against these contracts. Azure Put Blob otherwise
-replaces an existing blob, so create-only and root preconditions are essential.
-See [Put Blob](https://learn.microsoft.com/en-us/rest/api/storageservices/put-blob)
-and [conditional headers](https://learn.microsoft.com/en-us/rest/api/storageservices/specifying-conditional-headers-for-blob-service-operations)
-(consulted 2026-10-12). No metadata depends on Azure's restricted blob metadata
-names. The layer never writes `baseline/` or modifies/deletes S3 objects.
-
-### Immutable evidence and verification format
-
-Each deterministic batch ID is SHA-256 of canonical JSON containing bucket and
-sorted `kind/uuid/revision` identities. Greedy batches span UUID shards and
-contain at most 4,096 objects / 64 MiB payload by default. They use uncompressed,
-deterministically ordered ZIP files, fixed member timestamps, regular-file
-members only and no transformation of source bytes:
-
-- `incremental/batches/<batch-id>.zip` holds exact payloads at
-  `objects/<SHA-256(receipt identity)>.bin` and `receipts.json`.
-- `receipts.json` is the existing `{value, sha256}` wrapper. Value contains
-  schema version 1, bucket, batch ID and a receipt map keyed by
-  `kind/uuid/revision`. Each receipt preserves listing revision, source identity,
-  content type, metadata, version ID, SHA-256, length and payload member.
-- `<zip-name>.prepared.json` records batch/blob identity, archive SHA-256/size and
-  manifest checksum. This immutable, readback-verified intent binds restart to
-  the locally verified source batch; it does **not** establish coverage.
-- `<zip-name>.verified.json` adds `status=destination_verified`, only after
-  persisted ZIP readback checks archive hash/length, wrapped manifest checksum,
-  exact identities, members, metadata, and every payload hash/length.
-
-Upload acknowledgement alone never establishes coverage. Existing blobs must
-match expected bytes; conflicting content is fatal, never overwritten. Matching
-prepared/archive data can be read and fully verified on restart without another
-S3 GET. A missing archive is rebuilt and must match the prior intent. Immutable
-verified receipt readback is required before adding a version 3 batch descriptor
-with existing fields plus `verification_blob` and `verification_sha256`.
-Compact shard tuples and the historical baseline descriptor remain unchanged.
-
-### Publication, failures and restart
-
-After evidence and verification receipts succeed, stage local append-only shard
-revisions, upload/readback-verify only changed immutable Azure shard locations
-`index/shards/<hh>/<checksum>.json`, and create/readback-verify the candidate root
-snapshot `index/roots/<root-checksum>.json`. Preserve the preceding root snapshot
-before any replacement. Only then conditionally replace `index/index.json` using
-the root ETag captured at sweep start (updated after each confirmed batch).
-Read back the committed root. An ETag conflict aborts without overwriting another
-writer. A lost root acknowledgement is accepted only if readback exactly matches
-the candidate. Otherwise completion is uncertain and restart revalidates the
-committed remote root. Confirmed publication is reported even if later local
-cache synchronization fails; restart verifies remote additions before adoption.
-
-Restart full-prefix reconciliation in a fresh plan, reusing committed coverage;
-never resume a source page cursor. Previously committed unchanged source bytes
-are not downloaded, and unchanged shards are not uploaded. Source failure or
-revision mismatch cannot publish that batch. Upload/readback/shard/root failure
-leaves prior committed coverage readable. Verified but uncommitted archives and
-shards are discoverable by batch/root/checksum names. Changed batch composition
-on a later sweep can leave duplicate **uncommitted** staged data; no automatic
-repair or evidence deletion is implemented. Later Azure integration requires
-bounded retention/cleanup for superseded index metadata and a separately reviewed
-policy for staged data. Retain roots and all referenced revisions needed by
-active readers/recovery; this slice authorizes no deletion.
-
-### Bounds, request and traffic implications
-
-Defaults additionally bound objects to 16 MiB, ZIPs to 128 MiB, receipt metadata
-to 16 MiB, scratch to 4 GiB, cumulative network bytes to 8 GiB, S3 GETs to 8,192,
-Azure reads to 4,096, Azure writes to 1,024, and attempts to 3 per retryable
-operation, with a soft one-hour runtime. Existing 256-shard/index limits remain.
-Source LISTs are zero in transfer: full-prefix listing/page/spool budgets are
-owned by the Slice 1 planner. Every attempted request and streamed network byte,
-including retries and metadata/readback, is charged. Byte counters measure
-application data, excluding HTTP/TLS overhead. Failures stay incomplete.
-Scratch accounting includes metadata hardlinks conservatively and reserves one
-bounded staged file; filesystem/interpreter overhead is not a hard quota.
-Blocking SDK/filesystem calls require caller/transport timeouts; runtime checks
-cannot forcibly interrupt them. Stream failures restart, rather than resuming an
-uncertain partial stream. No new dependency or collector packaging change.
-
-For B new batches and S total changed shard revisions across those batches,
-normal successful execution from a synchronized cache uses approximately:
-
-- S3 GETs: N transferred objects, no HEADs; planner LISTs are separate.
-- Azure writes: `1 + 5B + S` attempted writes: prior root snapshot, prepared ZIP
-  intent, ZIP, verified receipt, candidate root snapshot, conditional root, and
-  changed shards. Existing immutable conflicts still count as attempts.
-- Azure reads: `258 + 6B + S`: startup root + 256 referenced shards + prior
-  root snapshot readback, then prepared lookup, prepared readback, ZIP readback,
-  verified receipt readback, candidate root snapshot readback, committed root
-  readback, and changed shard readbacks. This includes an absent prepared lookup.
-  The executable counters are authoritative.
-
-Read counts grow for retries, remote unadopted batches and restart verification.
-Let P be payload bytes, A ZIP bytes (P + wrapped receipts + ZIP overhead), M the
-compact index bytes and U changed shard bytes. Normal evidence network traffic
-is approximately `P + 2A` (source read + upload + independent destination read).
-Metadata traffic additionally includes M startup reads, U upload/readback,
-root snapshots/CAS/readback and receipt intents/readbacks. There is no measured
-live inventory, latency or bill here; monetary costs need the separately
-approved region/tier/pricing preflight. For 2,880 objects/day, one batch/day is
-possible only when payload total fits 64 MiB. More bytes/objects create more
-batches and can rewrite a shard more than once in a sweep. The 8,192 batch-table
-limit includes baseline; five years permits roughly four batches/day on average,
-subject to root byte limits. Check actual workload before deployment.
-
-This layer uses 64-character batch IDs. The earlier 14-character projections
-understate incremental index entry size by about 50 bytes/entry: at the synthetic
-five-year horizon this adds approximately 263 MB across the index, before root
-receipts. The existing changed-boundary measurement with 64-character IDs is
-applicable; neither the 256-shard partition nor its configured bounds changes.
-Transfer memory additionally holds one bounded plan shard, one batch of full
-receipts, ZIP directory and per-shard entry sets. Scratch retains staged metadata
-through the sweep; many large batches/old revisions can exhaust it before count
-bounds. These are bounded failures, not guarantees of unlimited daily capacity.
-
-### AWS-independent future recovery
-
-Obtain a committed root and its exact immutable shard references. Verify wrapped
-checksums, structure and baseline totals; reject missing/corrupt references and
-report identities not established as covered. Check the historical 7z archive
-against the trusted baseline SHA-256 **before safe extraction**, then reuse
-`evidence_backup.verify` and Slice 1 baseline relationship verification.
-
-For each referenced incremental batch, retrieve its immutable verification
-receipt and ZIP. Match receipt checksum to the root batch descriptor, require
-`destination_verified`, and compare batch/blob identity, archive length/SHA-256
-and manifest checksum. Validate the receipt map and exact ZIP member set, then
-stream each referenced payload and verify SHA-256/length. The compact tuple maps
-to the manifest's `kind/uuid/revision` receipt and original bucket/key; restore
-bytes without normalization, preserving each revision and all original metadata.
-Never merge changed revisions silently. Empty payloads are valid, missing data
-is a verification failure. Only the trusted baseline plus verified increments
-constitutes recovery; a prepared intent/upload response alone is insufficient.
-Tests demonstrate these mappings using synthetic ZIPs; live retrieval and actual
-restoration remain outside this slice.
+Validation: `python -B -m unittest discover -s tests -p "test_incremental*.py"`,
+then `python -B -m unittest discover -s tests`. Synthetic fixtures cover baseline
+corruption/relationships, complete and partial scans, growth/bounds, exact/empty
+bytes, opaque ETags, full metadata, changed revisions, conditional-read failures,
+checksums, immutable conflicts, persisted verification, paginated enumeration,
+interrupted uploads and completion retries. No historical archive or live provider
+is required.

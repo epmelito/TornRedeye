@@ -1,19 +1,18 @@
 """Injected-client incremental transfers; no SDK, credentials or live entry point.
 
 Azure adapter: open_blob(name) -> BlobRead; create_block_blob(name, stream, size)
-uses create-only BlockBlob writes; replace_root(name, stream, size, etag) uses
-atomic If-Match. Each adapter request has bounded transport timeouts and no hidden
+uses create-only BlockBlob writes; list_blobs(prefix, continuation_token, page_size)
+returns blobs (name, size) and next_token. A single publisher must be serialized. Each adapter request has bounded transport
+timeouts and no hidden
 retries. Streams must read in chunks <= evidence_backup.CHUNK. Normalize provider
-not-found, create-conflict and precondition failures to the exceptions below.
+not-found, create-conflict and create-only conflicts to the exceptions below.
 """
 
 import base64
 from dataclasses import dataclass, fields
 import hashlib
-from io import BytesIO
 import json
 import math
-import os
 from pathlib import Path
 import tempfile
 import time
@@ -22,7 +21,6 @@ from zipfile import ZipFile, ZipInfo, ZIP_STORED
 import evidence_backup as backup
 import incremental_backup as index_api
 
-ROOT_BLOB = 'index/index.json'
 MANIFEST = 'receipts.json'
 FORMAT = 1
 
@@ -37,10 +35,6 @@ class BlobMissing(Exception):
 
 class BlobExists(Exception):
     """A create-only write found an existing immutable blob."""
-
-
-class RootChanged(TransferError):
-    """The conditional root publication lost to another writer."""
 
 
 @dataclass
@@ -60,7 +54,8 @@ class Limits:
     max_scratch_bytes: int = 4 * 1024 ** 3
     max_transfer_bytes: int = 8 * 1024 ** 3
     max_s3_gets: int = 8192
-    max_azure_reads: int = 4096
+    max_azure_reads: int = 8192
+    max_azure_lists: int = 64
     max_azure_writes: int = 1024
     max_attempts: int = 3
     max_seconds: float = 3600
@@ -82,7 +77,7 @@ class Budget:
                 require(type(value) is int and value >= 0, 'invalid resource limit')
         require(limits.max_attempts > 0 and limits.max_batch_objects > 0, 'invalid retry or batch limit')
         self.limits, self.started = limits, time.monotonic()
-        self.counts = dict(s3_list=0, s3_gets=0, azure_reads=0, azure_writes=0, transfer_bytes=0)
+        self.counts = dict(s3_list=0, s3_gets=0, azure_reads=0, azure_lists=0, azure_writes=0, transfer_bytes=0)
 
     def runtime(self):
         require(time.monotonic() - self.started < self.limits.max_seconds, 'runtime limit exceeded')
@@ -143,14 +138,14 @@ def identity(item):
 
 
 class Runner:
-    def __init__(self, s3, azure, cache, scratch, budget):
-        self.s3, self.azure, self.cache = s3, azure, Path(cache).absolute()
+    def __init__(self, s3, azure, bucket, scratch, budget):
+        self.s3, self.azure, self.bucket = s3, azure, bucket
         self.scratch, self.budget, self.limits = scratch, budget, budget.limits
         self.serial = 0
         self.allocated = {}
-        self.current = index_api.load_index(self.cache)
         self.verified_batches = 0
         self.committed_batches = 0
+        self.pending_intents = set()
 
     def path(self):
         self.serial += 1
@@ -218,9 +213,9 @@ class Runner:
         finally:
             self.remove(path)
 
-    def create_verify(self, name, path, limit, retain=False):
-        require(name != ROOT_BLOB and not name.startswith('baseline/'), 'immutable destination scope violation')
-        expected_size, expected_hash = backup._file_hash(path)
+    def create_verify(self, name, path, limit, retain=False, expected=None):
+        require(name.startswith('incremental/batches/'), 'immutable destination scope violation')
+        expected_size, expected_hash = expected if expected is not None else backup._file_hash(path)
         require(expected_size <= limit, 'destination size limit exceeded')
         for attempt in range(self.limits.max_attempts):
             self.budget.operation('azure_writes')
@@ -271,7 +266,7 @@ class Runner:
         identity(item)
         require(item['size'] <= self.limits.max_object_bytes, 'source object size limit exceeded')
         response = self.budget.call('s3_gets', lambda: self.s3.get_object(
-            Bucket=self.current['bucket'], Key=item['key'], IfMatch=item['etag']))
+            Bucket=self.bucket, Key=item['key'], IfMatch=item['etag']))
         body, path = response['Body'], self.path()
         try:
             observed = {'key': item['key'], 'size': response['ContentLength'], 'etag': response['ETag'],
@@ -289,7 +284,7 @@ class Runner:
             if response.get('ChecksumType') == 'FULL_OBJECT' and response.get('ChecksumSHA256'):
                 require(response['ChecksumSHA256'] == base64.b64encode(bytes.fromhex(checksum)).decode(),
                         'S3 SHA-256 mismatch')
-            receipt = {'status': 'source_verified', 'bucket': self.current['bucket'], 'key': item['key'],
+            receipt = {'status': 'source_verified', 'bucket': self.bucket, 'key': item['key'],
                        'inventory': {k: item[k] for k in ('key', 'size', 'etag', 'last_modified')},
                        'sha256': checksum, 'size': item['size'], 'content_type': content_type,
                        'metadata': metadata, 'etag': observed['etag'],
@@ -309,7 +304,7 @@ class Runner:
                 sources.append(path)
                 receipts[identity(item)] = receipt
             manifest = {'schema_version': FORMAT, 'batch': batch_id,
-                        'bucket': self.current['bucket'], 'receipts': receipts}
+                        'bucket': self.bucket, 'receipts': receipts}
             index_api._metadata_size(manifest, self.limits.max_manifest_bytes)
             manifest_bytes = wrapped(manifest)
             archive_bound = sum(p.stat().st_size for p in sources) + len(manifest_bytes) + len(items) * 512 + 512
@@ -338,8 +333,8 @@ class Runner:
             for path in sources:
                 self.remove(path)
 
-    def inspect_archive(self, path, expected, items=None):
-        size, checksum = backup._file_hash(path)
+    def inspect_archive(self, path, expected, items=None, observed=None):
+        size, checksum = observed if observed is not None else backup._file_hash(path)
         require(size == expected['size'] and checksum == expected['sha256'], 'Azure archive checksum mismatch')
         with ZipFile(path) as archive:
             infos = archive.infolist()
@@ -352,7 +347,7 @@ class Runner:
                     'receipt manifest size limit exceeded')
             manifest = decode(archive.read(MANIFEST))
             require(manifest['schema_version'] == FORMAT and manifest['batch'] == expected['batch']
-                    and manifest['bucket'] == self.current['bucket']
+                    and manifest['bucket'] == self.bucket
                     and backup._digest(manifest) == expected['manifest_sha256'], 'batch manifest conflict')
             receipts = manifest['receipts']
             require(isinstance(receipts, dict) and 0 < len(receipts) <= self.limits.max_batch_objects,
@@ -389,210 +384,174 @@ class Runner:
                 if receipt['key'].startswith(backup.PREFIXES[0]) and 'sha256' in receipt['metadata']:
                     require(receipt['metadata']['sha256'] == receipt['sha256'], 'raw metadata checksum mismatch')
             require({info.filename for info in infos} == members, 'unexpected archive member')
+            if 'coverage' in expected:
+                rows = [[*reference.split('/'), receipt['sha256'], receipt['size']]
+                        for reference, receipt in sorted(receipts.items())]
+                index_api.validate_completion(expected, self.bucket)
+                require(sorted(expected['coverage']) == rows, 'completion receipt mapping conflict')
             return manifest
 
-    def verify_existing_batch(self, batch_id, descriptor):
-        proof, _ = self.json_blob(descriptor['verification_blob'], self.limits.max_manifest_bytes)
-        require(backup._digest(proof) == descriptor['verification_sha256']
-                and proof['status'] == 'destination_verified' and proof['batch'] == batch_id
-                and proof['blob'] == descriptor['blob'] and proof['sha256'] == descriptor['sha256']
-                and descriptor['receipts_member'] == MANIFEST, 'verification receipt conflict')
-        path, _, _ = self.read_blob(descriptor['blob'], self.limits.max_archive_bytes)
-        try:
-            return self.inspect_archive(path, proof)
-        finally:
-            self.remove(path)
+    def _complete(self, prepared, persisted, items=None, observed=None):
+        manifest = self.inspect_archive(persisted, prepared, items, observed=observed)
+        rows = []
+        for reference, receipt in sorted(manifest['receipts'].items()):
+            kind, identifier, revision = reference.split('/')
+            rows.append([kind, identifier, revision, receipt['sha256'], receipt['size']])
+        value = dict(prepared, schema_version=2, status='destination_verified',
+                     bucket=self.bucket, coverage=rows)
+        index_api.validate_completion(value, self.bucket)
+        self.json_create(prepared['blob'] + '.verified.json', value, self.limits.max_manifest_bytes)
+        self.verified_batches += 1
+        self.committed_batches += 1
+        self.pending_intents.discard(prepared['batch'])
+        return value
 
-    def snapshot(self):
-        remote, self.etag = self.json_blob(ROOT_BLOB, index_api.MAX_ROOT_BYTES)
-        index_api._validate_index(remote)
-        target = self.scratch / 'snapshot'
-        target.mkdir()
-        backup._write(target, 'index.json', self.current)
-        self.track(target / 'index.json')
-        added_batches = set()
-        for shard in index_api.SHARDS:
-            old = index_api.read_shard(self.cache, shard, index=self.current)
-            local = backup._path(target, self.current['shards'][shard]['location'])
-            local.parent.mkdir(parents=True, exist_ok=True)
-            self.disk((self.cache / self.current['shards'][shard]['location']).stat().st_size)
-            os.link(self.cache / self.current['shards'][shard]['location'], local)
-            self.track(local)
-            incoming, _, _ = self.read_blob('index/' + remote['shards'][shard]['location'], index_api.MAX_SHARD_BYTES)
-            try:
-                value = decode(incoming.read_bytes())
-                if remote['shards'][shard] == self.current['shards'][shard]:
-                    require(value == old, 'remote shard content conflict')
-                else:
-                    self.disk(len(wrapped(value)))
-                    descriptor = index_api.stage_shard_revision(target, value, index=remote,
-                        baseline_bytes=remote['shards'][shard]['baseline_bytes'])
-                    self.track(target / descriptor['location'])
-                    require(descriptor == remote['shards'][shard], 'remote shard descriptor conflict')
-                old_set = {tuple(entry) for entry in old['entries']}
-                for entry in value['entries']:
-                    if tuple(entry) not in old_set:
-                        require(entry[3] != 'baseline', 'remote fabricated baseline coverage')
-                        added_batches.add(entry[3])
-            finally:
-                self.remove(incoming)
-        authority = self.scratch / 'authority'
-        authority.mkdir()
-        for batch in sorted(added_batches):
-            manifest = self.verify_existing_batch(batch, remote['batches'][batch])
-            for ref, receipt in manifest['receipts'].items():
-                kind, uuid = index_api.key_parts(receipt['key'])
-                entry = [kind, uuid, index_api.revision_fingerprint(receipt['inventory']), batch]
-                self.disk(len(backup._bytes(entry)) + 1)
-                index_api._append(authority, uuid[:2], entry)
-                self.track(authority / (uuid[:2] + '.jsonl'))
-        for shard in index_api.SHARDS:
-            old = {tuple(e) for e in index_api.read_shard(self.cache, shard, index=self.current)['entries']}
-            new = {tuple(e) for e in index_api.read_shard(target, shard, index=remote)['entries']}
-            proof = {tuple(e) for e in index_api._spooled(authority, shard, index_api.MAX_RECORDS,
-                                                         index_api.MAX_SHARD_BYTES)}
-            require(new - old <= proof, 'remote coverage lacks independently verified evidence')
-        self.disk(len(wrapped(remote)))
-        index_api.publish_index(target, remote)
-        self.track(target / 'index.json')
-        self.sync_cache(target, remote)
-        self.current, self.snapshot_dir = remote, target
-        self.json_create('index/roots/' + backup._digest(remote) + '.json', remote, index_api.MAX_ROOT_BYTES)
+    def enumerate_batches(self):
+        """Bounded complete enumeration; no historical payload reads on normal runs."""
+        blobs, token, tokens, last = {}, None, set(), ''
+        while True:
+            page = self.budget.call('azure_lists', lambda: self.azure.list_blobs(
+                prefix='incremental/batches/', continuation_token=token, page_size=5000))
+            entries, following = page['blobs'], page['next_token']
+            require(isinstance(entries, list) and len(entries) <= 5000, 'invalid Azure listing page')
+            require(following is None or isinstance(following, str) and following
+                    and following not in tokens and entries, 'invalid Azure continuation')
+            for entry in entries:
+                name, size = entry['name'], entry['size']
+                require(isinstance(name, str) and name > last, 'duplicate or unordered Azure listing')
+                last = name
+                prefix = 'incremental/batches/'
+                require(name.startswith(prefix), 'unexpected Azure listing prefix')
+                suffix = name[len(prefix):]
+                batch, ending = suffix[:64], suffix[64:]
+                require(index_api.batch_blob(batch) == prefix + batch + '.zip'
+                        and ending in ('.zip', '.zip.prepared.json', '.zip.verified.json'),
+                        'unexpected incremental blob')
+                require(type(size) is int and 0 <= size <= (self.limits.max_archive_bytes
+                        if ending == '.zip' else self.limits.max_manifest_bytes), 'invalid listed blob size')
+                if batch not in blobs:
+                    require(len(blobs) < index_api.MAX_BATCHES, 'batch reference capacity exceeded')
+                    blobs[batch] = {}
+                blobs[batch][ending] = size
+            if following is None:
+                self.pending_intents = {batch for batch, files in blobs.items()
+                                        if '.zip.prepared.json' in files and '.zip.verified.json' not in files}
+                return blobs
+            tokens.add(following)
+            token = following
 
-    def sync_cache(self, source, candidate):
-        for shard in index_api.SHARDS:
-            if self.current['shards'][shard] != candidate['shards'][shard]:
-                value = index_api.read_shard(source, shard, index=candidate)
-                index_api.stage_shard_revision(self.cache, value, index=candidate,
-                                              baseline_bytes=candidate['shards'][shard]['baseline_bytes'])
-        index_api.publish_index(self.cache, candidate)
-
-    def candidates(self, plan_directory):
-        for shard in index_api.SHARDS:
-            plan = index_api.read_plan_shard(plan_directory, shard)
-            require(plan['bucket'] == self.current['bucket'], 'plan source bucket conflict')
-            covered = {tuple(e[:3]) for e in index_api.read_shard(
-                self.snapshot_dir, shard, index=self.current)['entries']}
-            last = None
-            for item in sorted(plan['new'] + plan['changed'], key=lambda item: item['key']):
-                ref = identity(item)
-                kind, uuid = index_api.key_parts(item['key'])
-                require(uuid[:2] == shard and item['key'] != last, 'duplicate or misplaced candidate')
-                last = item['key']
-                if (kind, uuid, ref.split('/')[-1]) not in covered:
-                    require(item['size'] <= self.limits.max_object_bytes, 'source object size limit exceeded')
-                    yield item
-
-    def conditional_root(self, candidate):
-        data = wrapped(candidate)
-        self.budget.operation('azure_writes')
-        try:
-            reader = UploadStream(BytesIO(data), self.budget)
-            self.azure.replace_root(ROOT_BLOB, reader, len(data), self.etag)
-            require(reader.consumed == len(data), 'incomplete root upload')
-        except RootChanged:
-            raise
-        except OSError:
-            pass
-        persisted, etag = self.json_blob(ROOT_BLOB, index_api.MAX_ROOT_BYTES)
-        require(persisted == candidate, 'conditional root outcome uncertain or concurrent root update')
-        self.etag = etag
+    def completed_batches(self, blobs):
+        for batch, files in sorted(blobs.items()):
+            self.budget.runtime()
+            blob = index_api.batch_blob(batch)
+            if '.zip.verified.json' in files:
+                proof, _ = self.json_blob(blob + '.verified.json', self.limits.max_manifest_bytes)
+                index_api.validate_completion(proof, self.bucket)
+                require(proof['batch'] == batch and files.get('.zip') == proof['size'],
+                        'completed batch evidence missing or size mismatch')
+                yield proof
+            elif '.zip' in files:
+                require('.zip.prepared.json' in files, 'uncommitted archive lacks trusted intent')
+                prepared, _ = self.json_blob(blob + '.prepared.json', self.limits.max_manifest_bytes)
+                require(prepared['batch'] == batch and prepared['blob'] == blob
+                        and prepared['schema_version'] == FORMAT and files['.zip'] == prepared['size'],
+                        'prepared intent conflict')
+                path, checksum, _ = self.read_blob(blob, self.limits.max_archive_bytes)
+                try:
+                    yield self._complete(prepared, path, observed=(path.stat().st_size, checksum))
+                finally:
+                    self.remove(path)
+            # A prepared-only batch establishes no coverage. It may be retried
+            # when its source candidates are still present; never skip them.
 
     def process(self, items):
-        batch_id = backup._digest({'bucket': self.current['bucket'], 'objects': sorted(identity(i) for i in items)})
-        require(len(self.current['batches']) < index_api.MAX_BATCHES, 'batch reference capacity exceeded')
-        blob = 'incremental/batches/' + batch_id + '.zip'
-        prepared_name, verified_name = blob + '.prepared.json', blob + '.verified.json'
-        prepared, _ = self.json_blob(prepared_name, self.limits.max_manifest_bytes, optional=True)
-        archive = None
-        if prepared is not None:
-            require(prepared['batch'] == batch_id and prepared['blob'] == blob, 'prepared intent conflict')
-            try:
-                archive, _, _ = self.read_blob(blob, self.limits.max_archive_bytes)
-            except BlobMissing:
-                pass
-        if archive is None:
-            archive, manifest = self.pack(items, batch_id)
-            size, checksum = backup._file_hash(archive)
-            expected = {'schema_version': FORMAT, 'batch': batch_id, 'blob': blob,
-                        'size': size, 'sha256': checksum, 'manifest_sha256': backup._digest(manifest)}
-            if prepared is not None:
-                require(prepared == expected, 'source or prepared batch conflict')
-            else:
-                self.json_create(prepared_name, expected, self.limits.max_manifest_bytes)
-                prepared = expected
-            persisted = self.create_verify(blob, archive, self.limits.max_archive_bytes, retain=True)
-            self.remove(archive)
-            archive = persisted
+        batch = backup._digest({'bucket': self.bucket, 'objects': sorted(identity(i) for i in items)})
+        blob = index_api.batch_blob(batch)
+        prepared, _ = self.json_blob(blob + '.prepared.json', self.limits.max_manifest_bytes, optional=True)
+        archive, manifest = self.pack(items, batch)
         try:
-            manifest = self.inspect_archive(archive, prepared, items)
+            size, checksum = backup._file_hash(archive)
+            expected = {'schema_version': FORMAT, 'batch': batch, 'blob': blob, 'size': size,
+                        'sha256': checksum, 'manifest_sha256': backup._digest(manifest)}
+            require(prepared is None or prepared == expected, 'source or prepared batch conflict')
+            if prepared is None:
+                self.json_create(blob + '.prepared.json', expected, self.limits.max_manifest_bytes)
+            self.pending_intents.add(batch)
+            persisted = self.create_verify(blob, archive, self.limits.max_archive_bytes,
+                                           retain=True, expected=(size, checksum))
+            try:
+                # create_verify already independently hashed persisted bytes.
+                self._complete(expected, persisted, items, observed=(size, checksum))
+            finally:
+                self.remove(persisted)
         finally:
             self.remove(archive)
-        proof = dict(prepared, status='destination_verified')
-        self.json_create(verified_name, proof, self.limits.max_manifest_bytes)
-        self.verified_batches += 1
-        candidate = decode(wrapped(self.current))
-        candidate['batches'][batch_id] = {'kind': 'increment', 'blob': blob, 'sha256': proof['sha256'],
-            'receipts_member': MANIFEST, 'verification_blob': verified_name,
-            'verification_sha256': backup._digest(proof)}
-        by_shard = {}
-        for reference, receipt in manifest['receipts'].items():
-            kind, uuid = index_api.key_parts(receipt['key'])
-            by_shard.setdefault(uuid[:2], []).append([kind, uuid, reference.split('/')[-1], batch_id])
-        for shard, entries in by_shard.items():
-            value = index_api.read_shard(self.snapshot_dir, shard, index=self.current)
-            value['entries'].extend(entries)
-            self.disk(len(wrapped(value)))
-            candidate['shards'][shard] = index_api.stage_shard_revision(self.snapshot_dir, value, index=candidate,
-                baseline_bytes=self.current['shards'][shard]['baseline_bytes'])
-            self.track(self.snapshot_dir / candidate['shards'][shard]['location'])
-        old_current = self.current
-        self.disk(len(wrapped(candidate)))
-        index_api.publish_index(self.snapshot_dir, candidate)
-        self.track(self.snapshot_dir / 'index.json')
-        for shard in by_shard:
-            path = self.snapshot_dir / candidate['shards'][shard]['location']
-            self.create_verify('index/' + candidate['shards'][shard]['location'], path, index_api.MAX_SHARD_BYTES)
-        self.json_create('index/roots/' + backup._digest(candidate) + '.json', candidate, index_api.MAX_ROOT_BYTES)
-        self.conditional_root(candidate)
-        self.committed_batches += 1
-        self.current = old_current
-        self.sync_cache(self.snapshot_dir, candidate)
-        self.current = candidate
 
 
-def transfer_plan(*, s3, azure, index_directory, plan_directory, limits=Limits()):
-    """Transfer a complete Slice 1 plan using injected clients and ephemeral scratch.
+def run_backup(*, s3, azure, bucket, baseline_catalog_sha256, inventories,
+               limits=Limits(), scratch_parent=None):
+    """One serialized offline-testable sweep; injected adapters own live access.
 
-    Baseline bootstrap is not provided. The private local index is a trusted
-    committed cache; remote updates must be append-only and their added coverage
-    independently verified before adoption. Successful batches commit separately,
-    retaining progress on later failure. No payload remains locally on return.
+    Pin the baseline catalog digest independently after verified archive bootstrap.
+    Completed immutable manifests are trusted writer receipts, not cryptographic
+    proof against a privileged writer. Scratch coverage is disposable. Full S3
+    listing inputs must include both terminal prefixes; no source LIST is issued
+    here. Real adapter listing attempts/bytes require their own bounded accounting.
     """
     budget = Budget(limits)
     result = {'complete': False, 'consistent_cutoff': False, 'verified_batches': 0,
-              'committed_batches': 0, 'error': None}
+              'committed_batches': 0, 'pending_intents': 0, 'error': None}
     runner = None
     try:
-        # same filesystem permits immutable shard hardlinks; scratch is ephemeral
-        with tempfile.TemporaryDirectory(prefix='transfer-', dir=Path(index_directory).absolute().parent) as temporary:
+        with tempfile.TemporaryDirectory(prefix='backup-', dir=scratch_parent) as temporary:
             root = Path(temporary)
-            runner = Runner(s3, azure, index_directory, root, budget)
-            runner.snapshot()
-            items, size = [], 0
-            for item in runner.candidates(plan_directory):
-                if items and (len(items) == limits.max_batch_objects or size + item['size'] > limits.max_batch_bytes):
-                    runner.process(items)
-                    items, size = [], 0
-                require(item['size'] <= limits.max_batch_bytes, 'batch payload size limit exceeded')
-                items.append(item)
-                size += item['size']
-            if items:
-                runner.process(items)
-            result['complete'] = True
+            with backup._lock(root) as private:
+                runner = Runner(s3, azure, bucket, private, budget)
+                baseline, _ = runner.json_blob(index_api.BASELINE_CATALOG_BLOB, limits.max_manifest_bytes)
+                index_api.validate_baseline(baseline, baseline_catalog_sha256)
+                require(baseline['bucket'] == bucket, 'baseline bucket conflict')
+                blobs = runner.enumerate_batches()
+                coverage = root / 'coverage'
+                index_api.reconstruct_coverage(baseline, runner.completed_batches(blobs),
+                    trusted_catalog_sha256=baseline_catalog_sha256, output_directory=coverage,
+                    max_spool_bytes=limits.max_scratch_bytes // 3, check_runtime=budget.runtime)
+                budget.runtime()
+                plan = root / 'plan'
+                remaining = limits.max_seconds - (time.monotonic() - budget.started)
+                sweep = index_api.plan_reconciliation(coverage, inventories, output_directory=plan,
+                    max_spool_bytes=limits.max_scratch_bytes // 3,
+                    max_output_bytes=limits.max_scratch_bytes // 3, max_seconds=remaining)
+                result['sweep'] = sweep
+                require(sweep['complete'], 'incomplete source sweep: ' + str(sweep['error']))
+                for path in root.rglob('*'):
+                    if path.is_file():
+                        runner.track(path)
+                batch_items, size = [], 0
+                new_batches = 0
+                for partition in index_api.PARTITIONS:
+                    budget.runtime()
+                    part = index_api.read_plan_partition(plan, partition)
+                    for item in sorted(part['new'] + part['changed'], key=lambda row: row['key']):
+                        require(item['size'] <= limits.max_object_bytes and item['size'] <= limits.max_batch_bytes,
+                                'source object size limit exceeded')
+                        if batch_items and (len(batch_items) == limits.max_batch_objects
+                                            or size + item['size'] > limits.max_batch_bytes):
+                            require(len(blobs) + new_batches < index_api.MAX_BATCHES, 'batch capacity exceeded')
+                            runner.process(batch_items)
+                            new_batches += 1
+                            batch_items, size = [], 0
+                        batch_items.append(item)
+                        size += item['size']
+                if batch_items:
+                    require(len(blobs) + new_batches < index_api.MAX_BATCHES, 'batch capacity exceeded')
+                    runner.process(batch_items)
+                require(not runner.pending_intents,
+                        'unresolved prepared intents: ' + str(len(runner.pending_intents)))
+                result['complete'] = True
     except Exception as error:
         result['error'] = str(error) if isinstance(error, backup.BackupError) else type(error).__name__
     if runner is not None:
-        result.update(verified_batches=runner.verified_batches, committed_batches=runner.committed_batches)
+        result.update(verified_batches=runner.verified_batches, committed_batches=runner.committed_batches,
+                      pending_intents=len(runner.pending_intents))
     result['operations'] = dict(budget.counts)
     return result
