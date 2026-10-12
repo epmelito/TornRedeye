@@ -506,7 +506,7 @@ is `[kind, uuid_hex, revision_fingerprint, batch_id]`:
   verified batch SHA-256 and a `receipts_member` path. That receipt manifest maps
   `kind/uuid_hex/revision_fingerprint` to the full verified receipt and payload
   reference. Many objects may share one archive/batch; no per-object Azure
-  metadata blob is required. The future transfer publisher must verify manifest
+  metadata blob is required. The Slice 2 transfer publisher verifies manifest
   identities, payloads and destination integrity before adding index coverage.
 
 Different preserved revisions may share a source key. Duplicate identities,
@@ -537,8 +537,9 @@ incremental batches and revisions may be appended. A rejected replacement leaves
 the committed root and its immutable revisions untouched. Initial baseline
 construction remains a separate bootstrap, not a replacement-publication bypass.
 The comparison retains at most two bounded shard entry sets plus the small root
-snapshots, never a global catalog. Verification of newly transferred evidence and
-Azure conditional publication remain later integration responsibilities.
+snapshots, never a global catalog. The offline injected-client Slice 2 layer below
+verifies new evidence and implements conditional Azure root publication; live
+adapter wiring remains later work.
 
 Superseded/unreferenced index metadata requires bounded retention and cleanup
 in the later Azure integration. Retain revisions referenced by committed roots,
@@ -632,8 +633,8 @@ boundary. Measurements include fixture allocation, serialization/decoding,
 validation and reconciliation under `tracemalloc`; they are not live evidence
 measurements, RSS guarantees or cloud timing measurements. Total index and daily
 transfer estimates are projections, not observed bills. Full provenance receipts
-are stored once in immutable batches. A future daily sweep needs the compact
-index once, with at most one rewrite per affected shard after verified transfers;
+are stored once in immutable batches. A daily sweep reads the compact
+index once, with one rewrite per affected shard per committed transfer batch;
 never fetch/rewrite it for every page or object. Read plus full-rewrite estimates
 are conservative when every shard changes; unchanged shards need no rewrite.
 Capacity review must consider revision counts, serialized/spool sizes and runtime
@@ -646,3 +647,191 @@ extra for one root read plus rewrite). Publication adds one bounded local
 verification pass over referenced shards before committing the root; this does
 not require fetching each shard repeatedly from Azure. Prior core scalability
 measurements above remain representative; current offline suites repeat them.
+
+## Offline incremental transfer (Issue #23, Slice 2)
+
+`incremental_transfer.transfer_plan(s3=..., azure=..., index_directory=...,
+plan_directory=..., limits=Limits(...))` consumes a complete Slice 1 plan. It
+returns `complete`, `error`, independently `verified_batches`, confirmed
+`committed_batches`, and charged request/traffic counters. Completion remains
+provisional (`consistent_cutoff=False`). Failed later batches retain earlier
+committed progress. Configuration errors raise before execution; execution
+failures return incomplete with sanitized diagnostics. No SDK, credentials,
+live command, bootstrap, scheduling or provider configuration is implemented.
+
+The caller supplies a trusted private committed index cache and exclusive local
+writer ownership. Remote roots must extend that cache under Slice 1 append-only
+validation. All 256 remote referenced shards are read and checksum-validated;
+any remotely added coverage requires independently reading and verifying its
+incremental archive and receipt before the cache advances. This trust anchor
+cannot be bootstrapped from an arbitrary unverified remote root. Historical
+baseline download/SHA-256 checking/safe extraction remain separate later work.
+Keep cache and planning metadata outside Git and temporary payload scratch on
+the same filesystem as the cache; scratch is removed on success or failure.
+Never put payloads in GitHub artifacts/caches or retain a local evidence archive.
+Abrupt process termination can leave private temporary files; a future worker
+needs bounded local scratch cleanup before restart, separate from Azure evidence
+retention. Ordinary returns and exceptions clean this run's scratch.
+
+### Adapter and source contract
+
+The injected S3 client supplies `get_object(Bucket, Key, IfMatch)` compatible
+with the existing export client. Fetch only new/changed listed revisions,
+conditioned on their opaque ETag. Returned size, ETag and UTC LastModified must
+match the planned listing fingerprint. Preserve content type, every string user
+metadata field, source bucket/key, observed timestamps, ETag and optional version
+ID. Hash exact streamed bytes, enforce declared length, validate raw `sha256`
+metadata when present and returned S3 SHA-256 when explicitly FULL_OBJECT.
+Zero-length bodies and absent raw/normalized counterparts are valid. ETags are
+not hashes; conditional reads cannot detect every privileged or metadata-only
+mutation. Optional S3 checksums depend on the adapter response and permissions;
+they supplement local hashing, not replace it. See [AWS GetObject](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html)
+(consulted 2026-10-12).
+
+The Azure adapter supplies these narrow operations, with bounded transport
+connect/read timeouts and no hidden retries. Each method represents one provider
+HTTP request (GET or single Put Blob); future multipart SDK adapters must expose
+and charge their additional requests before use:
+
+- `open_blob(name) -> BlobRead(body, size, etag)`, with reads bounded by 64 KiB;
+- `create_block_blob(name, stream, size)`, `BlockBlob` with `If-None-Match: *`;
+- `replace_root(name, stream, size, etag)`, atomic **If-Match: etag**, only for
+  `index/index.json`.
+
+Upload streams require explicit positive reads of at most 64 KiB. Normalize only
+actual not-found to `BlobMissing`, create conflict to `BlobExists`, and failed
+root precondition to `RootChanged`; authorization errors are not absence. Future
+adapters must be tested against these contracts. Azure Put Blob otherwise
+replaces an existing blob, so create-only and root preconditions are essential.
+See [Put Blob](https://learn.microsoft.com/en-us/rest/api/storageservices/put-blob)
+and [conditional headers](https://learn.microsoft.com/en-us/rest/api/storageservices/specifying-conditional-headers-for-blob-service-operations)
+(consulted 2026-10-12). No metadata depends on Azure's restricted blob metadata
+names. The layer never writes `baseline/` or modifies/deletes S3 objects.
+
+### Immutable evidence and verification format
+
+Each deterministic batch ID is SHA-256 of canonical JSON containing bucket and
+sorted `kind/uuid/revision` identities. Greedy batches span UUID shards and
+contain at most 4,096 objects / 64 MiB payload by default. They use uncompressed,
+deterministically ordered ZIP files, fixed member timestamps, regular-file
+members only and no transformation of source bytes:
+
+- `incremental/batches/<batch-id>.zip` holds exact payloads at
+  `objects/<SHA-256(receipt identity)>.bin` and `receipts.json`.
+- `receipts.json` is the existing `{value, sha256}` wrapper. Value contains
+  schema version 1, bucket, batch ID and a receipt map keyed by
+  `kind/uuid/revision`. Each receipt preserves listing revision, source identity,
+  content type, metadata, version ID, SHA-256, length and payload member.
+- `<zip-name>.prepared.json` records batch/blob identity, archive SHA-256/size and
+  manifest checksum. This immutable, readback-verified intent binds restart to
+  the locally verified source batch; it does **not** establish coverage.
+- `<zip-name>.verified.json` adds `status=destination_verified`, only after
+  persisted ZIP readback checks archive hash/length, wrapped manifest checksum,
+  exact identities, members, metadata, and every payload hash/length.
+
+Upload acknowledgement alone never establishes coverage. Existing blobs must
+match expected bytes; conflicting content is fatal, never overwritten. Matching
+prepared/archive data can be read and fully verified on restart without another
+S3 GET. A missing archive is rebuilt and must match the prior intent. Immutable
+verified receipt readback is required before adding a version 3 batch descriptor
+with existing fields plus `verification_blob` and `verification_sha256`.
+Compact shard tuples and the historical baseline descriptor remain unchanged.
+
+### Publication, failures and restart
+
+After evidence and verification receipts succeed, stage local append-only shard
+revisions, upload/readback-verify only changed immutable Azure shard locations
+`index/shards/<hh>/<checksum>.json`, and create/readback-verify the candidate root
+snapshot `index/roots/<root-checksum>.json`. Preserve the preceding root snapshot
+before any replacement. Only then conditionally replace `index/index.json` using
+the root ETag captured at sweep start (updated after each confirmed batch).
+Read back the committed root. An ETag conflict aborts without overwriting another
+writer. A lost root acknowledgement is accepted only if readback exactly matches
+the candidate. Otherwise completion is uncertain and restart revalidates the
+committed remote root. Confirmed publication is reported even if later local
+cache synchronization fails; restart verifies remote additions before adoption.
+
+Restart full-prefix reconciliation in a fresh plan, reusing committed coverage;
+never resume a source page cursor. Previously committed unchanged source bytes
+are not downloaded, and unchanged shards are not uploaded. Source failure or
+revision mismatch cannot publish that batch. Upload/readback/shard/root failure
+leaves prior committed coverage readable. Verified but uncommitted archives and
+shards are discoverable by batch/root/checksum names. Changed batch composition
+on a later sweep can leave duplicate **uncommitted** staged data; no automatic
+repair or evidence deletion is implemented. Later Azure integration requires
+bounded retention/cleanup for superseded index metadata and a separately reviewed
+policy for staged data. Retain roots and all referenced revisions needed by
+active readers/recovery; this slice authorizes no deletion.
+
+### Bounds, request and traffic implications
+
+Defaults additionally bound objects to 16 MiB, ZIPs to 128 MiB, receipt metadata
+to 16 MiB, scratch to 4 GiB, cumulative network bytes to 8 GiB, S3 GETs to 8,192,
+Azure reads to 4,096, Azure writes to 1,024, and attempts to 3 per retryable
+operation, with a soft one-hour runtime. Existing 256-shard/index limits remain.
+Source LISTs are zero in transfer: full-prefix listing/page/spool budgets are
+owned by the Slice 1 planner. Every attempted request and streamed network byte,
+including retries and metadata/readback, is charged. Byte counters measure
+application data, excluding HTTP/TLS overhead. Failures stay incomplete.
+Scratch accounting includes metadata hardlinks conservatively and reserves one
+bounded staged file; filesystem/interpreter overhead is not a hard quota.
+Blocking SDK/filesystem calls require caller/transport timeouts; runtime checks
+cannot forcibly interrupt them. Stream failures restart, rather than resuming an
+uncertain partial stream. No new dependency or collector packaging change.
+
+For B new batches and S total changed shard revisions across those batches,
+normal successful execution from a synchronized cache uses approximately:
+
+- S3 GETs: N transferred objects, no HEADs; planner LISTs are separate.
+- Azure writes: `1 + 5B + S` attempted writes: prior root snapshot, prepared ZIP
+  intent, ZIP, verified receipt, candidate root snapshot, conditional root, and
+  changed shards. Existing immutable conflicts still count as attempts.
+- Azure reads: `258 + 6B + S`: startup root + 256 referenced shards + prior
+  root snapshot readback, then prepared lookup, prepared readback, ZIP readback,
+  verified receipt readback, candidate root snapshot readback, committed root
+  readback, and changed shard readbacks. This includes an absent prepared lookup.
+  The executable counters are authoritative.
+
+Read counts grow for retries, remote unadopted batches and restart verification.
+Let P be payload bytes, A ZIP bytes (P + wrapped receipts + ZIP overhead), M the
+compact index bytes and U changed shard bytes. Normal evidence network traffic
+is approximately `P + 2A` (source read + upload + independent destination read).
+Metadata traffic additionally includes M startup reads, U upload/readback,
+root snapshots/CAS/readback and receipt intents/readbacks. There is no measured
+live inventory, latency or bill here; monetary costs need the separately
+approved region/tier/pricing preflight. For 2,880 objects/day, one batch/day is
+possible only when payload total fits 64 MiB. More bytes/objects create more
+batches and can rewrite a shard more than once in a sweep. The 8,192 batch-table
+limit includes baseline; five years permits roughly four batches/day on average,
+subject to root byte limits. Check actual workload before deployment.
+
+This layer uses 64-character batch IDs. The earlier 14-character projections
+understate incremental index entry size by about 50 bytes/entry: at the synthetic
+five-year horizon this adds approximately 263 MB across the index, before root
+receipts. The existing changed-boundary measurement with 64-character IDs is
+applicable; neither the 256-shard partition nor its configured bounds changes.
+Transfer memory additionally holds one bounded plan shard, one batch of full
+receipts, ZIP directory and per-shard entry sets. Scratch retains staged metadata
+through the sweep; many large batches/old revisions can exhaust it before count
+bounds. These are bounded failures, not guarantees of unlimited daily capacity.
+
+### AWS-independent future recovery
+
+Obtain a committed root and its exact immutable shard references. Verify wrapped
+checksums, structure and baseline totals; reject missing/corrupt references and
+report identities not established as covered. Check the historical 7z archive
+against the trusted baseline SHA-256 **before safe extraction**, then reuse
+`evidence_backup.verify` and Slice 1 baseline relationship verification.
+
+For each referenced incremental batch, retrieve its immutable verification
+receipt and ZIP. Match receipt checksum to the root batch descriptor, require
+`destination_verified`, and compare batch/blob identity, archive length/SHA-256
+and manifest checksum. Validate the receipt map and exact ZIP member set, then
+stream each referenced payload and verify SHA-256/length. The compact tuple maps
+to the manifest's `kind/uuid/revision` receipt and original bucket/key; restore
+bytes without normalization, preserving each revision and all original metadata.
+Never merge changed revisions silently. Empty payloads are valid, missing data
+is a verification failure. Only the trusted baseline plus verified increments
+constitutes recovery; a prepared intent/upload response alone is insufficient.
+Tests demonstrate these mappings using synthetic ZIPs; live retrieval and actual
+restoration remain outside this slice.

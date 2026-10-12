@@ -388,7 +388,7 @@ def publish_index(directory, index, *, max_records=MAX_RECORDS, max_bytes=MAX_SH
     Validate both snapshots one shard at a time. Baseline identities/totals and
     existing batch descriptors/entries cannot change; only incremental coverage
     may be appended. Initial baseline construction uses the separate bootstrap.
-    Azure conditional publication remains later work.
+    Azure conditional publication is provided by the injected transfer layer.
     """
     _limits(max_records=max_records, max_bytes=max_bytes)
     with backup._lock(directory) as root:
