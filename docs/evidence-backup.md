@@ -2,7 +2,9 @@
 
 [Issue #19](https://github.com/epmelito/TornRedeye/issues/19) provides offline-tested
 tooling in `evidence_backup.py`. Passing synthetic tests does **not** establish
-that a live backup exists. No restoration or recurring backup is implemented.
+that a live backup exists. Manual baseline and incremental backups and recovery
+verification have completed. The OIDC/`rcl` scheduled integration remains
+unverified live and disabled.
 The [evidence continuity requirements](aws-cost-protection.md#evidence-continuity-and-recovery-requirements)
 remain authoritative for storage ownership, independent copies and recovery.
 
@@ -427,22 +429,24 @@ canonical S3 evidence and the independent Azure backup. Preserve the whole
 baseline archive, including manifest, inventory, receipts and payloads. Retain the exact collector/schema commit and configuration
 needed to interpret history separately, without secrets.
 
-Live restoration remains separate work: approve an isolated private destination,
+Further live restoration requires separate approval: use an isolated private destination,
 original-identity/location mapping, conditional no-overwrite restoration and
 representative success/failure/empty/raw-only tests, then measure recovery gaps
 and duration. Preserve embedded original bucket/key references. Do not restore
 stale polling control or clear a halt automatically; use
 [deployment recovery safeguards](deployment.md#polling-safeguards-and-recovery).
-No restore command, external synchronization or backup schedule is provided here.
+No restore command or external synchronization is provided here. The disabled
+daily integration is described under [scheduled operation](#scheduled-operation-disabled-by-default).
 
 ## Incremental backup: immutable batch completion (Issue #23)
 
 AWS S3 is primary; Azure Blob is the sole persistent external evidence copy.
 `incremental_backup.py` and `incremental_transfer.py` are offline-testable,
 SDK-free functions with injected clients. `incremental_runner.py` adds the thin
-S3/Azure provider adapters and explicitly gated executable described below. No
-live bootstrap, authentication setup, scheduler or automation is implemented or
-activated. Run exactly one publisher at a time. There is no remote index, mutable root, root snapshot,
+S3/Azure provider adapters and explicitly gated executable described below. The
+daily GitHub Actions integration is defined but disabled; its OIDC authentication,
+generated `rcl` SAS and hosted-runner execution remain unverified live.
+Run exactly one publisher at a time. There is no remote index, mutable root, root snapshot,
 compare-and-swap publication or remote index partitioning.
 
 ### Trusted baseline and disposable coverage
@@ -467,7 +471,7 @@ cutoff, counts, bytes and rows `[kind, uuid_hex, revision, content_sha256, byte_
 Original content type, all user metadata, timestamps, source ETag/version ID and
 original archive-member references remain in the verified archive's receipts.
 Key and receipt-member names are deterministically recovered from each compact row.
-Pin the catalog value digest independently after verification. A future bootstrap
+Pin the catalog value digest independently after verification. Historical bootstrap
 may create `baseline/yata-cutoff-20261011.coverage.json` once; routine runs only read
 it and require its pinned digest. A self-checksum alone does not establish trust.
 No Azure bootstrap write is provided here; tests build a synthetic local archive tree.
@@ -475,8 +479,8 @@ No Azure bootstrap write is provided here; tests build a synthetic local archive
 #### One-time offline archive-to-catalog procedure
 
 The existing builder and installed 7-Zip are sufficient; no new repository script
-or dependency is needed. This procedure is preparation, **not evidence that the
-historical bootstrap succeeded**. It needs the actual approved archive already
+or dependency is needed. This procedure describes archive-to-catalog preparation;
+completion evidence is recorded separately. It needs the actual approved archive already
 present locally. Do not fetch cloud evidence or publish anything in this work package.
 Use a fresh private staging directory outside every Git tree, sufficient free space,
 and a trusted local 7-Zip installation. Keep archive/staging files quiescent and
@@ -621,7 +625,7 @@ its original source bucket, cutoff, counts and bytes against the approved histor
 record, and retain the observed pin independently of the Azure blob. No production
 catalog digest or inventory measurements are supplied by this preparation.
 
-The later separately authorized live bootstrap must obtain the approved archive,
+For a separately authorized bootstrap, obtain the approved archive,
 run this offline conversion, then create `baseline/yata-cutoff-20261011.coverage.json`
 as a BlockBlob from the **unchanged `catalog/baseline.json` bytes**, using create-only
 publication and independent persisted-byte readback. Verify length/file SHA-256,
@@ -751,7 +755,7 @@ executable requires `--bucket`, `--owner` (12-digit expected AWS bucket owner),
 `--baseline-catalog-sha256` (independently pinned lowercase catalog value digest),
 `--scratch-parent` (private directory outside Git) and separate live approval via
 `--live-access-approved`. The flag is an execution gate, not authorization by itself.
-Do not run live in this slice. `--max-seconds` defaults to the one-hour soft limit;
+Live execution requires separate approval. `--max-seconds` defaults to the one-hour soft limit;
 engine object, batch, transfer and scratch bounds remain unchanged.
 
 The CLI emits one JSON result and exits zero only for `complete=True`; failures,
@@ -778,7 +782,9 @@ The Azure adapter uses standard-library HTTPS and Azure public-cloud Blob REST
 version 2019-12-12, with an existing URI-encoded SAS supplied externally in
 `TORNREDEYE_AZURE_SAS`. It does not generate, renew, provision or log credentials.
 The token must already permit required container listing, evidence reads and
-create-only writes; bootstrap/authentication permissions are a later work package.
+create-only writes. The daily integration generates this token using the
+[OIDC permissions below](#cloud-identities-and-permissions); historical bootstrap
+still requires separate authorization and permissions.
 There is no Azure SDK dependency. Account/container configuration fixes the HTTPS
 host and path. Redirects are rejected. LIST uses container comp=list, canonical
 incremental prefix, maxresults and marker, then validates bounded XML; GET exposes
@@ -812,11 +818,175 @@ outside application request counters and needs validation before live approval.
 Transport timeouts are inactivity limits and runtime checks are soft between
 operations; they do not forcibly interrupt a stalled/drip-fed SDK or socket call.
 
-Validation uses fake SDK clients and fake HTTPS connections exclusively. Provider
+Offline validation uses fake SDK clients and fake HTTPS connections exclusively. Provider
 response formats, pagination, error mapping, bounded streams, conditional writes,
 source ownership, baseline failure, entry-point exit codes, corrupt readback,
-lost acknowledgement and verified restart are exercised offline. Public-cloud REST
-interoperability and configured credential permissions remain unverified live.
+lost acknowledgement and verified restart are exercised offline. Completed manual
+backup and recovery verification does not establish the scheduled integration's
+OIDC authentication, generated `rcl` permissions or hosted-runner compatibility.
+
+### Scheduled operation: disabled by default
+
+`.github/workflows/daily-backup.yml` defines 03:23 UTC daily execution and manual
+dispatch, both gated by the repository Actions variable `DAILY_BACKUPS_ENABLED`
+being exactly `true`. An unset variable or any other value skips the job before
+checkout, credential exchange or cloud access. Only repository ID `1409429829`,
+owner ID `188345459`, and exact ref `refs/heads/main` are allowed. The gate does
+not depend on a default-branch property in the event payload.
+There are no pull request, push or tag triggers. Branch/default-branch changes
+require coordinated review of the gates and both cloud trust policies.
+
+One repository-wide concurrency group serializes scheduled and manual runs;
+`cancel-in-progress: false` preserves the running backup. GitHub can replace an
+older pending run with a newer pending run; this is not a daily delivery guarantee.
+The group does not serialize a local CLI or another repository: keep those
+writers stopped. GitHub schedules can be delayed/missed and can be disabled after
+inactivity in public repositories. Failed/incomplete jobs must be checked through
+Actions; no new monitoring or notification service is introduced.
+
+The workflow uses a fresh GitHub-hosted Ubuntu 24.04 runner, Python 3.11, the
+existing boto3 dependency (installed at a fixed version), and the runner's Azure
+CLI. Provider actions and checkout/setup are pinned to verified full commit IDs.
+There is no Azure SDK addition. `tools/daily_backup.py` requests a container
+user-delegation SAS with `--auth-mode login --as-user --https-only`, read/create/list
+(`rcl`) only, starting five minutes earlier for clock skew and expiring 75 minutes
+after issuance. SAS fields are checked before passing it solely through the
+runner child environment as `TORNREDEYE_AZURE_SAS`; no GitHub output/env file,
+command argument or artifact contains the token.
+
+The runner gets a 55-minute soft deadline; its subprocess is killed and reported
+failed after 60 minutes, SAS generation times out after two minutes, and the job
+has a 75-minute bound. AWS credentials last 75 minutes. These hard limits cover
+stalled provider calls that the existing between-operation checks cannot stop.
+No run succeeds unless both the runner exit code is zero and its JSON has literal
+`complete: true`. A timeout can leave a remotely prepared or uploaded batch;
+the next run uses existing verified restart/reconciliation, without deleting or
+overwriting evidence. Completion still does not assert a consistent cutoff.
+
+Temporary archives, manifests and captured stdout/stderr use owner-only scratch
+under `RUNNER_TEMP`, outside checkout. Only fixed success/failure stage messages
+enter Actions logs; the full JSON and provider diagnostics are discarded. Normal
+exit removes scratch and an `always()` step removes the fixed scratch/Azure CLI
+directories on failure. Azure/AWS login actions perform their credential cleanup.
+Force termination may prevent cleanup; hosted-runner disposal is the final
+boundary. No cache or artifact upload is used. Keep Actions step/runner debugging
+and Azure CLI debug logging disabled for live execution; the wrapper rejects
+`RUNNER_DEBUG=1`. Inspect failed private remote batches through a separately
+authorized private diagnostic session, never by printing captured output in Actions.
+
+#### Cloud identities and permissions
+
+Configuration below is for subsequent separately approved setup, not commands
+to execute during offline implementation. Use no AWS access-key secret, Azure
+client secret, account key or stored SAS.
+
+Use issuer `https://token.actions.githubusercontent.com` for both providers.
+GitHub's [current OIDC reference](https://docs.github.com/en/actions/reference/security/oidc#immutable-subject-claims)
+requires immutable owner/repository IDs in the default subject for repositories
+created after July 15, 2026. The
+[repository metadata](https://api.github.com/repos/epmelito/TornRedeye) reports
+creation on October 7, 2026 and the IDs above. Therefore the expected default,
+case-sensitive subject for this job (which uses no GitHub environment) is:
+
+```text
+repo:epmelito@188345459/TornRedeye@1409429829:ref:refs/heads/main
+```
+
+This is an inference from current GitHub requirements and repository metadata,
+not an observed JWT. Repository subject customization could change it. Access to
+the repository OIDC customization endpoint was unavailable through the read-only
+connector used for this implementation. Before cloud setup/activation, inspect
+the repository Actions OIDC settings (or authenticated read-only
+`GET /repos/epmelito/TornRedeye/actions/oidc/customization/sub`) and confirm the
+effective subject. If a separately approved token check is needed, compare only
+`iss`, `aud` and `sub` privately; never log/store the full token. Do not adopt the
+older names-only example or wildcard trust. Adding a GitHub environment also
+changes the subject and requires new review.
+
+AWS: use an IAM OIDC provider with audience `sts.amazonaws.com` and a dedicated
+role allowing `sts:AssumeRoleWithWebIdentity` only for that provider. In the role
+trust statement use exact `StringEquals` conditions:
+
+```json
+{
+  "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+  "token.actions.githubusercontent.com:sub": "repo:epmelito@188345459/TornRedeye@1409429829:ref:refs/heads/main"
+}
+```
+
+After confirming the subject, grant the role only `s3:ListBucket` on the canonical
+bucket ARN with `s3:prefix` restricted to `raw/yata/jap/206/` and
+`normalized/yata/jap/206/`, and `s3:GetObject` on those two object-prefix ARNs.
+No writes, deletes, other prefixes, deployment or collector-control access.
+Allow a 4,500-second role session. The runner sends ExpectedBucketOwner on every
+LIST/GET; the action also checks the configured account ID. SSE-S3 needs no KMS
+permission; deployed KMS encryption would require separate decrypt review.
+
+Azure public cloud: use a dedicated Entra application/service principal (or
+user-assigned managed identity), with an exact federated identity credential for
+that issuer and subject and audience `api://AzureADTokenExchange`. Supply its
+client/tenant/subscription IDs. Assign Storage Blob Delegator at the storage
+account scope for `Microsoft.Storage/storageAccounts/blobServices/generateUserDelegationKey/action`.
+Assign a custom role at the **existing backup container** scope, with no management
+Actions and only these DataActions:
+
+```text
+Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read
+Microsoft.Storage/storageAccounts/blobServices/containers/blobs/add/action
+```
+
+Read includes listing. The documented create-new BlockBlob action is `add/action`;
+`write` and `delete` are unnecessary and are excluded. See
+[Put Blob authorization](https://learn.microsoft.com/en-us/rest/api/storageservices/put-blob#authorization)
+and [Storage Blob Delegator](https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/storage#storage-blob-delegator).
+The [user-delegation SAS contract](https://learn.microsoft.com/en-us/rest/api/storageservices/create-user-delegation-sas)
+intersects the principal's permissions with signed SAS permissions; `c` permits
+new BlockBlobs while `w` permits overwrites. Do not substitute Data Contributor,
+which also grants write/delete. This container-scoped minimum allows reads and
+new blobs anywhere in that container, including baseline names; runner path
+guards restrict ordinary daily writes to `incremental/batches/`. It is not a
+prefix-level cloud authorization boundary. Both identities trust default-branch
+jobs generally, so protect `main` and review changes to code/workflows that can
+request OIDC tokens; the activation variable is an operational gate, not IAM.
+
+#### Configuration and later activation
+
+Repository Actions variables (no credential secrets):
+
+| Variable | Required value |
+| --- | --- |
+| `DAILY_BACKUPS_ENABLED` | Unset or `false` until separately approved; then exactly `true` |
+| `BACKUP_AWS_ROLE_ARN` | Dedicated read-only OIDC role ARN |
+| `BACKUP_AWS_OWNER` | Expected 12-digit canonical bucket/account owner |
+| `BACKUP_AWS_REGION` | Canonical bucket region (`eu-north-1` for current deployment) |
+| `BACKUP_AWS_BUCKET` | Canonical private evidence bucket name |
+| `BACKUP_AZURE_CLIENT_ID` | Dedicated Entra principal client ID |
+| `BACKUP_AZURE_TENANT_ID` | Entra tenant ID |
+| `BACKUP_AZURE_SUBSCRIPTION_ID` | Existing storage subscription ID |
+| `BACKUP_AZURE_ACCOUNT` | Existing public-cloud storage account name |
+| `BACKUP_AZURE_CONTAINER` | Existing private backup container (`tornredeye-backups`) |
+| `BACKUP_BASELINE_CATALOG_SHA256` | Independently verified lowercase catalog **value** digest, not archive/file SHA-256 |
+
+Before scheduled activation, separately approve OIDC identity configuration and
+live OIDC/`rcl` integration verification. Reuse the verified baseline/catalog pin; check
+network/firewall access from a hosted runner, retention of batch artifacts, and
+the selected identity permissions. Confirm installed Azure CLI token shape/expiry
+and read/create/list interoperability, including existing-blob conditional PUT
+error mapping and interrupted-run recovery with create-only permissions. Offline
+tests cannot establish those live contracts; do not broaden permissions to hide
+an authorization/error-mapping problem. Account SAS expiration policy may need to
+accept the 80-minute signed interval (five-minute skew plus 75-minute lifetime).
+
+After review/merge through the separate GitHub workflow, keep the variable disabled
+while configuring the approved identities/variables and checking effective subject
+matching. Once live execution/recurring operation is explicitly approved, set the
+gate to `true` and manually dispatch **main** for a verified first run; enabling
+the gate also permits the next daily schedule, so coordinate that window. Check
+Actions outcome and privately verify the expected persisted evidence. Set the
+gate to `false` to stop future jobs; it does not stop one already running. Do not
+run a second local publisher while a job is active. The scheduled integration has
+not been activated or verified live; completed manual recovery verification does
+not establish OIDC/`rcl` scheduled compatibility.
 
 ### Resource bounds and cost comparison
 
