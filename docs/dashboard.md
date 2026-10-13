@@ -59,11 +59,19 @@ queries AWS. Reload obtains a newer publication.
 
 S3 publication is one atomic conditional PUT: initial `IfNoneMatch=*`, later
 `IfMatch` on the previous ETag. An older overlapping invocation cannot replace
-a snapshot with a newer retrieval cutoff. A failed read, conflicting write,
-serialization or size failure leaves the previous snapshot intact. A lost PUT acknowledgement has an
+a snapshot with a newer retrieval cutoff. Without `ListBucket`, a missing object
+can return `AccessDenied`/403 on GET. That ambiguous denial permits only a
+create-only PUT with `IfNoneMatch=*`; it is not proof the object is absent.
+That create-only attempt still fails visibly on an existing object, denied write
+or concurrent creation. Other read failures, write conflicts and serialization
+or size failures leave the previous snapshot intact. A lost PUT acknowledgement has an
 uncertain outcome: S3 contains either the previous object or the new complete
 valid snapshot, never a partially written JSON object. No delete or rollback of
 canonical evidence is attempted.
+
+Publication failures log only allowlisted AWS error codes or fixed error
+categories. Unknown codes and raw exception messages are suppressed, and the
+invocation still fails with `dashboard publication failed`.
 
 ## Retrieval bounds and provenance
 

@@ -214,8 +214,10 @@ def publish(s3, bucket, snapshot):
     try:
         previous = s3.get_object(Bucket=bucket, Key=SNAPSHOT_KEY)
     except Exception as error:
-        if getattr(error, "response", {}).get("Error", {}).get("Code") not in ("NoSuchKey", "404"):
+        if getattr(error, "response", {}).get("Error", {}).get("Code") not in (
+                "NoSuchKey", "404", "AccessDenied", "403"):
             raise
+        # without ListBucket, a missing key can be denied; only attempt create-only
     else:
         stream = previous["Body"]
         try:
@@ -233,6 +235,25 @@ def publish(s3, bucket, snapshot):
     return True
 
 
+def publication_error_category(error):
+    response = getattr(error, "response", {})
+    details = response.get("Error", {}) if isinstance(response, dict) else {}
+    code = details.get("Code") if isinstance(details, dict) else None
+    if isinstance(code, str):
+        return code if code in (
+            "AccessDenied", "403", "NoSuchKey", "404", "NoSuchBucket",
+            "PreconditionFailed", "ConditionalRequestConflict", "InvalidAccessKeyId",
+            "SignatureDoesNotMatch", "ExpiredToken", "InvalidToken", "SlowDown",
+            "InternalError", "ServiceUnavailable", "RequestTimeout") else "aws_error"
+    if isinstance(error, TimeoutError):
+        return "timeout"
+    if isinstance(error, ValueError):
+        return "invalid_snapshot"
+    if isinstance(error, OSError):
+        return "transport_error"
+    return "unexpected_error"
+
+
 def lambda_handler(event, context):
     import boto3
     from botocore.config import Config
@@ -248,8 +269,9 @@ def lambda_handler(event, context):
     # no private telemetry, identifiers or exception text in publisher logs
     try:
         updated = publish(clients["s3"], os.environ["DASHBOARD_BUCKET"], snapshot)
-    except Exception:
-        print("dashboard publication failed; previous object retained or write outcome uncertain")
+    except Exception as error:
+        print(f"dashboard publication failed ({publication_error_category(error)}); "
+              "previous object retained or write outcome uncertain")
         raise RuntimeError("dashboard publication failed") from None
     print("dashboard publication completed" if updated else "dashboard publication superseded")
     return {"state": snapshot["state"], "updated": updated}
