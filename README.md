@@ -1,92 +1,107 @@
 # TornRedeye
 
-A data engineering project exploring Torn's foreign market stock patterns,
-restock timing, and probabilistic forecasting.
+Torn is an online browser-based game with overseas shops where players buy items.
+TornRedeye tracks foreign stock availability in those shops to learn when they
+restock and how quickly their stock sells out. The system currently monitors one stock listing in Japan using data from YATA.
 
-The Python collector and S3 persistence functions can be called directly:
+The aim is to use that history to find recurring patterns and eventually
+estimate when stock might return. Later analysis needs to account for gaps and
+cached responses in that history.
 
-```python
-from uuid import uuid4
+## How it works
 
-import boto3
+The collector saves original responses and processed records in S3, building a
+history of foreign stock availability. Monitoring follows collection health,
+while backups keep a separate copy in Azure.
 
-from s3_persistence import persist
-from yata_collector import collect
-
-s3 = boto3.client("s3", region_name="eu-north-1")
-collection_id = uuid4()
-result = collect()
-receipt = persist(result, s3=s3, bucket="YOUR_EXISTING_BUCKET", collection_id=collection_id)
+```mermaid
+flowchart TD
+    schedule["EventBridge Scheduler"] --> collector["Lambda collector: live"]
+    source["YATA: overseas shop availability"] --> collector
+    collector --> history["S3: raw and processed records"]
+    collector --> monitoring["CloudWatch logs and alarms"]
+    monitoring --> notifications["SNS notifications"]
+    history --> backup["GitHub Actions: verified backup run"]
+    backup --> azure["Azure Blob Storage"]
+    history -.-> analysis["Analysis and forecasting: planned"]
 ```
 
-The caller supplies boto3 and an existing bucket. The SDK must support S3
-`put_object(IfNoneMatch="*")`. Client credentials use the SDK's normal credential
-chain. Storage requires `s3:PutObject` and `s3:GetObject` for retry comparisons.
-No SDK dependency is needed to import these modules or run the deterministic tests.
+Solid arrows show implemented paths; the dotted branch is planned analysis.
 
-Generate a new UUID for each retrieval, even when YATA returns cached data.
-Retry storage with the **same UUID and original result**, including its retrieval
-time; fetching again is a separate collection run. Source timestamps never
-identify a run. Conditional writes accept matching existing bytes and metadata
-and reject conflicting evidence without overwriting it.
+## Technology stack
 
-Raw bytes are under `raw/yata/jap/206/` and normalized JSON records under
-`normalized/yata/jap/206/`. Raw objects also carry retrieval/provenance metadata;
-normalized records link to the raw key, byte count, and SHA-256 digest. A collection
-without an available response body has a normalized record with
-`raw_evidence: null`; an empty or partial response body is still retained.
-Collection status and errors are saved without inventing an observation. Timestamp ages support freshness assessment;
-no freshness threshold or exact restock/sellout time is inferred.
-
-Raw is written first. `PersistenceError` identifies the failed stage, object keys,
-confirmed raw progress, and the original exception via `__cause__`. A failed
-write may have succeeded remotely. Keep the UUID and original result for a
-storage retry; it verifies existing objects and completes missing writes.
-There is no transaction across the two objects: interrupted writes can leave
-raw-only evidence. No existing objects are deleted or replaced.
-
-The Lambda entry point is `lambda_function.lambda_handler`. It uses the SDK
-included in the Lambda Python runtime; no additional runtime dependency is
-introduced. These environment variables configure it:
-
-| Variable | Behavior |
+| Technology | Responsibility |
 | --- | --- |
-| `DESTINATION_BUCKET` | Required, existing destination bucket |
-| `YATA_TIMEOUT_SECONDS` | Optional, finite positive request timeout; defaults to 15 seconds |
-| `AWS_REGION` | Supplied by Lambda; defaults to `eu-north-1` outside Lambda |
+| Python | Collect and validate API responses, store records, and verify backups. |
+| AWS EventBridge Scheduler and Lambda | Trigger and run the collector without maintaining a server. |
+| Amazon S3 | Hold the primary evidence history and shared polling-control state. |
+| CloudWatch and SNS | Turn logs and metrics into alarms and route configured notifications. |
+| GitHub Actions | Run the backup workflow with short-lived cloud access through OIDC authentication. |
+| Azure Blob Storage | Keep the independent backup, including archives and integrity manifests. |
 
-Invalid configuration or SDK initialization fails before collection. The handler
-requires a valid, initialized S3 control object and conditionally acquires it
-before contacting YATA. Ordinary spacing delays may wait once for at most 15
-seconds, then re-read and conditionally acquire state. Restricted, overlapping
-or otherwise ineligible invocations return `skipped` with a logged reason and
-no retrieval evidence. Missing or unsafe
-control state fails closed. Each eligible invocation calls the collector once
-and passes its original result to S3 persistence. Observed stock, including zero,
-returns a successful summary.
-Missing records are persisted and return a `missing` status with a warning.
-Malformed responses and collection failures are persisted first, then raise
-`CollectionError` so Lambda sees an invocation failure. Persistence failures
-propagate unchanged with their cause and partial-write progress. Logs include
-the UUID, Lambda request ID, collection status, timestamps, diagnostics, and
-storage outcome; raw response bodies are not logged.
+AWS SAM/CloudFormation templates define the collector, storage and monitoring
+resources, so their configuration is reviewed alongside the code.
 
-Each eligible retrieval gets a new UUID, including eligible redelivery of the
-same event. The handler does not retry collection or persistence itself. SDK
-storage retries use the same write content and keys. The exact control key
-`control/yata/jap/206/polling.json` coordinates requests at least 60 seconds after
-completion, persists Retry-After cooldowns and access halts, and stops for review
-after an abandoned attempt. The direct collector/persistence example above
-does not perform this coordination; use the guarded handler for production.
-A failed invocation cannot automatically resume the prior
-in-memory result. Raw-only evidence may remain after a partial write, and an
-S3 failure before the raw write completes can leave evidence unpersisted; the
-failure is reported. Set the Lambda execution timeout to allow for collection
-plus S3 writes and SDK retries when deploying.
+## Engineering highlights
 
-The [SAM template](template.json) defines storage retention, Lambda,
-IAM, logs, and a disabled schedule. See [deployment and operation](docs/deployment.md)
-for packaging, offline checks, deployment commands, control initialization and
-operator recovery, and data-retention limits.
-See [production monitoring](docs/monitoring.md) for persisted-observation alerts,
-private notification configuration, resource indicators and incremental costs.
+- **Scheduled collection with safeguards.** A one-minute schedule starts
+  collection attempts. A shared polling guard prevents overlapping requests,
+  enforces minimum spacing and honors `Retry-After` cooldowns. Access restrictions
+  or abandoned attempts stop collection for operator review.
+
+- **Evidence that remains traceable.** Original response bytes and normalized
+  JSON records use separate S3 prefixes. UTC retrieval times, available source
+  timestamps and provenance details preserve where each result came from.
+  Processed records link to available raw evidence through its key and SHA-256
+  hash. Missing information is recorded rather than treated as no stock available.
+
+- **Safe retries and visible failures.** Conditional S3 writes make retrying the
+  same collection idempotent: matching data is accepted and missing writes can
+  finish without overwriting existing records. Conflicts and partial failures
+  are reported. Each new retrieval gets its own identity, even when YATA returns
+  cached data; repeated observations are not silently discarded.
+
+- **Monitoring tied to saved observations.** CloudWatch alarms detect gaps in
+  successfully persisted observations, repeated Lambda errors and polling halts.
+  An HTTP success alone does not count as a saved observation. SNS provides the
+  notification route; delivery depends on the configured, confirmed subscription.
+
+- **Incremental backups with integrity checks.** The AWS-to-Azure runner
+  transfers new or detectably changed evidence. It reads uploaded archives back
+  and verifies SHA-256 hashes, payloads and metadata before recording completion.
+  Recovery checks cover the historical baseline plus increments, retaining
+  original bytes and provenance. Manual backup and recovery verification have
+  completed.
+
+- **Practical resource limits.** Compact coverage manifests avoid repeatedly
+  downloading historical payloads. Limits on requests, running time and temporary storage help prevent backup jobs from using excessive resources. The collector uses 128 MiB of Lambda memory
+  and 14-day log retention; monitoring avoids paid detailed S3 request metrics.
+  Actual costs still depend on stored data and cloud usage.
+
+## Current progress
+
+The live AWS collection system is operational. The GitHub-hosted backup has
+completed a [successful live run](https://github.com/epmelito/TornRedeye/actions/runs/38479321439)
+and verified its stored evidence. Recurring unattended execution is still
+awaiting its first scheduled-run verification.
+
+The public operations dashboard is not yet complete. Foreign stock forecasting
+is still planned; the project does not yet produce restock predictions.
+
+## Running locally
+
+Use Python 3.11 or newer. From the repository root, run the offline Python tests:
+
+```sh
+python -B -m unittest discover -s tests
+```
+
+No cloud credentials are needed; the suite uses synthetic data and fake cloud
+clients. See the links below for deployment and operating instructions.
+
+## Further information
+
+- [Deployment and operation](docs/deployment.md)
+- [Monitoring, alerts and resource use](docs/monitoring.md)
+- [Backups, verification and recovery](docs/evidence-backup.md)
+- [Public operations dashboard](docs/dashboard.md)
