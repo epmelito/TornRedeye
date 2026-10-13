@@ -1,11 +1,13 @@
 """Offline publisher, public contract, packaging and IAM regression checks."""
 
+from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
 import io
 import json
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
+import traceback
 import unittest
 from unittest.mock import Mock, patch
 from zipfile import ZipFile
@@ -36,6 +38,13 @@ def observed_record(**changes):
               "detail": "private exception", "credentials": "secret"}
     record.update(changes)
     return {"Body": io.BytesIO(json.dumps(record).encode())}
+
+
+def s3_error(code, status):
+    error = Exception("private credentials bucket object key account 123456789012")
+    error.response = {"Error": {"Code": code, "Message": str(error)},
+                      "ResponseMetadata": {"HTTPStatusCode": status}}
+    return error
 
 
 class PublisherTests(unittest.TestCase):
@@ -151,14 +160,83 @@ class PublisherTests(unittest.TestCase):
     def test_new_publication_and_out_of_order_publication(self):
         s = publisher.build_snapshot(clients(), CONFIG, NOW)
         client = Mock()
-        error = Exception(); error.response = {"Error": {"Code": "NoSuchKey"}}
-        client.get_object.side_effect = error
-        self.assertTrue(publisher.publish(client, "bucket", s))
-        self.assertEqual(client.put_object.call_args.kwargs["IfNoneMatch"], "*")
+        for code, status in (("NoSuchKey", 404), ("404", 404), ("AccessDenied", 403), ("403", 403)):
+            with self.subTest(code=code):
+                client.reset_mock()
+                client.get_object.side_effect = s3_error(code, status)
+                self.assertTrue(publisher.publish(client, "bucket", s))
+                written = client.put_object.call_args.kwargs
+                self.assertEqual(written["IfNoneMatch"], "*")
+                self.assertNotIn("IfMatch", written)
+                self.assertEqual(json.loads(written["Body"]), s)
+                client.put_object.assert_called_once()
         client.reset_mock(); client.get_object.side_effect = None
         client.get_object.return_value = {"Body": io.BytesIO(json.dumps({"published_at_utc": "2026-10-10T13:00:00Z"}).encode()), "ETag": "new"}
         self.assertFalse(publisher.publish(client, "bucket", s))
         client.put_object.assert_not_called()
+
+    def test_denied_initial_read_never_hides_write_denial_or_conflict(self):
+        snapshot = {"published_at_utc": publisher.stamp(NOW)}
+        for read_code in ("AccessDenied", "403", "NoSuchKey"):
+            for code, status in (("AccessDenied", 403), ("PreconditionFailed", 412),
+                                 ("ConditionalRequestConflict", 409), ("InternalError", 500)):
+                with self.subTest(read_code=read_code, write_code=code):
+                    client = Mock()
+                    client.get_object.side_effect = s3_error(read_code, 403 if read_code != "NoSuchKey" else 404)
+                    error = s3_error(code, status)
+                    client.put_object.side_effect = error
+                    with self.assertRaises(Exception) as caught:
+                        publisher.publish(client, "bucket", snapshot)
+                    self.assertIs(caught.exception, error)
+                    client.put_object.assert_called_once()
+                    self.assertEqual(client.put_object.call_args.kwargs["IfNoneMatch"], "*")
+                    self.assertNotIn("IfMatch", client.put_object.call_args.kwargs)
+                    client.delete_object.assert_not_called()
+
+    def test_existing_snapshot_update_remains_etag_conditional(self):
+        snapshot = {"published_at_utc": publisher.stamp(NOW)}
+        for code, status in ((None, None), ("PreconditionFailed", 412),
+                             ("ConditionalRequestConflict", 409), ("AccessDenied", 403)):
+            with self.subTest(code=code):
+                client = Mock()
+                client.get_object.return_value = {"Body": io.BytesIO(json.dumps(
+                    {"published_at_utc": "2026-10-10T11:00:00Z"}).encode()), "ETag": '"old"'}
+                if code is None:
+                    self.assertTrue(publisher.publish(client, "bucket", snapshot))
+                else:
+                    error = s3_error(code, status)
+                    client.put_object.side_effect = error
+                    with self.assertRaises(Exception) as caught:
+                        publisher.publish(client, "bucket", snapshot)
+                    self.assertIs(caught.exception, error)
+                self.assertEqual(client.put_object.call_args.kwargs["IfMatch"], '"old"')
+                self.assertNotIn("IfNoneMatch", client.put_object.call_args.kwargs)
+                client.put_object.assert_called_once()
+                client.delete_object.assert_not_called()
+
+    def test_unexpected_s3_read_errors_do_not_attempt_publication(self):
+        for code, status in (("NoSuchBucket", 404), ("SignatureDoesNotMatch", 403),
+                             ("SlowDown", 503), ("InternalError", 500)):
+            with self.subTest(code=code):
+                client = Mock()
+                error = s3_error(code, status)
+                client.get_object.side_effect = error
+                with self.assertRaises(Exception) as caught:
+                    publisher.publish(client, "bucket", {"published_at_utc": publisher.stamp(NOW)})
+                self.assertIs(caught.exception, error)
+                client.put_object.assert_not_called()
+
+    def test_equal_or_newer_retrieval_cutoff_prevents_replacement(self):
+        snapshot = {"as_of_utc": "2026-10-10T12:00:00Z", "published_at_utc": publisher.stamp(NOW)}
+        for cutoff in ("2026-10-10T12:00:00Z", "2026-10-10T12:15:00Z"):
+            with self.subTest(cutoff=cutoff):
+                client = Mock()
+                body = io.BytesIO(json.dumps({"as_of_utc": cutoff,
+                    "published_at_utc": "2026-10-10T12:20:00Z"}).encode())
+                client.get_object.return_value = {"Body": body, "ETag": '"newer"'}
+                self.assertFalse(publisher.publish(client, "bucket", snapshot))
+                self.assertTrue(body.closed)
+                client.put_object.assert_not_called()
 
     def test_failed_read_or_oversize_never_blindly_overwrites(self):
         client = Mock(); client.get_object.side_effect = Exception("AccessDenied")
@@ -194,6 +272,39 @@ class PublisherTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "^dashboard publication failed$"):
                 publisher.lambda_handler({}, context)
             self.assertFalse(c["s3"].delete_object.called)
+
+    def test_handler_publication_diagnostics_are_allowlisted_and_failure_stays_visible(self):
+        c = clients()
+        c["s3"].get_object.side_effect = s3_error("AccessDenied", 403)
+        sdk = SimpleNamespace(client=lambda name, **kwargs: c[name])
+        context = Mock(); context.get_remaining_time_in_millis.return_value = 39000
+        private = "private credentials bucket object key account 123456789012"
+        cases = [(s3_error("AccessDenied", 403), "AccessDenied"),
+                 (s3_error("PreconditionFailed", 412), "PreconditionFailed"),
+                 (s3_error("ConditionalRequestConflict", 409), "ConditionalRequestConflict"),
+                 (s3_error("InternalError", 500), "InternalError"),
+                 (s3_error(private, 500), "aws_error"),
+                 (ValueError(private), "invalid_snapshot"),
+                 (TimeoutError(private), "timeout"),
+                 (OSError(private), "transport_error"),
+                 (RuntimeError(private), "unexpected_error")]
+        malformed = RuntimeError(private); malformed.response = {"Error": private}
+        cases.append((malformed, "unexpected_error"))
+        with patch.dict("sys.modules", {"boto3": sdk, "botocore.config": SimpleNamespace(Config=Mock())}), \
+                patch.dict("os.environ", CONFIG, clear=True):
+            for error, category in cases:
+                with self.subTest(category=category):
+                    c["s3"].put_object.side_effect = error
+                    output = io.StringIO()
+                    with redirect_stdout(output), self.assertRaises(RuntimeError) as caught:
+                        publisher.lambda_handler({}, context)
+                    self.assertEqual(str(caught.exception), "dashboard publication failed")
+                    self.assertIn(f"dashboard publication failed ({category})", output.getvalue())
+                    diagnostic = output.getvalue() + "".join(traceback.format_exception(caught.exception))
+                    for secret in (private, *CONFIG.values(), publisher.SNAPSHOT_KEY):
+                        self.assertNotIn(secret, diagnostic)
+                    self.assertNotIn("dashboard publication completed", output.getvalue())
+                    self.assertIsNone(caught.exception.__cause__)
 
     def test_metric_rejects_outside_window_datapoints(self):
         client = Mock()
