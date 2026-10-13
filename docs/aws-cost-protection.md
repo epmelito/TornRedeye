@@ -297,12 +297,13 @@ The [evidence backup workflow](evidence-backup.md) documents the Issue #19 offli
 tooling and its manifest/verification contract. It does not establish a completed
 live backup or authorize export, storage, collector pauses or restoration.
 
-Smallest credible backup: an owner-controlled encrypted export on **two
-independent storage copies outside this account**, with separately recoverable
-keys. Private local media is sufficient initially; a second AWS bucket in the
-same account is not account-loss protection. Do not publish backups or manifests
-in GitHub/dashboard output. Storage purchase, export and recurring backup cadence
-need approval; no cross-account replication service is proposed.
+The approved Issue #23 architecture has exactly **two persistent evidence
+copies: canonical AWS S3 primary and one independent Azure Blob Storage backup**.
+Temporary local exports are disposable staging, not another persistent copy.
+Preserve the verified baseline archive and its recovery prerequisites; no
+additional storage provider or encryption layer is required. Do not publish
+backups or manifests in GitHub/dashboard output. Live export, cloud configuration
+and recurring backup activation remain separately authorized operations.
 
 - Export every object in both canonical prefixes, including malformed, missing,
   failure, empty-body, full foreign-market payload and raw-only partial writes.
@@ -324,8 +325,9 @@ need approval; no cross-account replication service is proposed.
   Record manifest cutoff, every page completion, per-prefix counts/bytes and
   failures. Hash all downloaded bytes with SHA-256, verify raw links against
   normalized hashes/lengths, and flag unpaired/conflicting records without repair
-  or deletion. ETags alone are not universal content hashes. Verify both backup
-  copies against the manifest; unresolved transfers prevent a completeness claim.
+  or deletion. ETags alone are not universal content hashes. Verify the Azure
+  backup and its recovery against the manifest; unresolved transfers prevent a
+  completeness claim.
 - Preserve the exact committed collector/schema code and configuration needed
   to interpret history. Keep a private forensic copy of control/configuration
   separately, without credentials, for diagnosis; **never automatically restore
@@ -355,8 +357,8 @@ still exists, not recovery of evidence already expired before retention changes.
 ## Proposed follow-up packages, in priority order
 
 1. **Evidence export and recovery:** implement bounded private manifest/export
-   tooling and integrity tests; separately approve live export, two-copy storage,
-   consistent cutoff and restore test. Confirm live retention and quantify archive.
+   tooling and integrity tests; separately approve live export, Azure backup
+   storage, consistent cutoff and restore test. Confirm live retention and quantify archive.
 2. **Low-cost operator protection:** configure approved private budget/credit
    notices, two traffic alarms and manual disable procedure; validate destinations
    and price/allowance eligibility. No automatic destructive response.
