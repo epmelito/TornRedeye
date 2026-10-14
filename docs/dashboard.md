@@ -2,17 +2,21 @@
 
 Issue [#11](https://github.com/epmelito/TornRedeye/issues/11) and
 [approved decisions](https://github.com/epmelito/TornRedeye/issues/11#issuecomment-6102066164)
-define this offline MVP. `dashboard-template.json` is a separate SAM/CloudFormation
-stack; `template.json`, collector code, schedule, safeguards and evidence remain
-unchanged. Deployment and independent infrastructure/security review are still
-required. This document is the dashboard operating contract; see
+define the bounded publisher contract. `dashboard-template.json` describes the
+separate dashboard stack; frontend changes do not require a collector stack update.
+This document describes behavior and operating procedures, not the current deployed
+revision or live scheduler state. Production changes require separate authorization.
+See
 [monitoring.md](monitoring.md) for collector signal and consumption semantics.
 
 ## Architecture and publication
 
-An hourly Lambda (Python 3.13, runtime boto3, 128 MiB x86, 90-second timeout)
-publishes only `public/data.json`. The unversioned private encrypted S3 bucket
-also holds three static assets. No hourly archive, database, frontend framework,
+A Lambda configured for hourly publication (Python 3.13, runtime boto3, 128 MiB
+x86, 90-second timeout) publishes only `public/data.json`. The EventBridge schedule
+defaults to disabled; activation requires separate authorization. The public
+snapshot contains no scheduler configuration or live schedule status.
+The unversioned private encrypted S3 bucket also holds five static assets.
+No hourly archive, database, frontend framework,
 new custom metrics, alarms, provider requests, billing API, or visitor AWS calls
 are introduced. An EventBridge rule starts disabled; automatic delivery and
 asynchronous execution retries are disabled. No reserved concurrency consumes
@@ -35,22 +39,60 @@ credentials, operator destinations and exception details are never copied.
 Frontend text uses `textContent`, not HTML interpolation. Missing values remain
 null/unavailable and measured zero remains zero.
 
-The page presents recent gap candidates and observation/provider freshness before
-seven-day history. Hourly trends and values remain available in an expandable
-section. Consumption values retain units and availability-aware classifications;
-coverage, provenance and UTC windows are accessible through each row's details.
-On narrow screens, consumption rows become labelled entries rather than requiring
-horizontal scanning of the primary values. A successful query with no numeric
-samples still displays unavailable, while reported zero remains measured data
-(or a derived zero subtotal). These presentation rules do not establish complete
-coverage or alter the published data contract.
+Issue [#30](https://github.com/epmelito/TornRedeye/issues/30), its
+[approved presentation specification](https://github.com/epmelito/TornRedeye/issues/30#issuecomment-6179329018)
+and [interactive refinement](https://github.com/epmelito/TornRedeye/issues/30#issuecomment-6179427837)
+define three static pages sharing `app.js`, `styles.css` and the existing snapshot:
+
+- `index.html` (Operations) explains the project, then shows activity and errors.
+  Shared controls default to 24 completed hours, hourly. Visitors can choose
+  24 hours or seven days at hourly, three-hour, six-hour or daily intervals.
+  Stop notices and capacity blocks summarize the latest 24 returned hours, not
+  current restriction status. The three-hour minute timeline distinguishes
+  positive activity, explicit zero and missing information. Neither absent
+  positive signals nor missing information confirms an outage. It uses
+  `recent_heartbeat.samples`, not legacy `recent_gaps` summaries.
+- `diagnostics.html` (Diagnostics) defaults to a continuous seven-day timeline
+  at six-hour granularity with the same controls. Activity uses a line;
+  error and stop reports use discrete bars. Exact hourly evidence, selected
+  observation timestamps, coverage and provenance remain expandable.
+- `usage.html` (Infrastructure & Usage) shows latest returned standard-storage
+  total, first comparable returned total and their net change. Daily storage
+  totals are never summed as additions. Its daily line has no hourly controls.
+  Object counts provide dated context. Execution runs, execution duration and
+  incoming log bytes share range controls, defaulting to seven days/six hours.
+  Publication and SNS activity remain in details. No public financial estimates,
+  allowance indicators or financial methodology are rendered; legacy financial
+  fields remain unchanged in the published snapshot.
+
+Charts are full width and vertically stacked. Count axes have integer ticks and
+an axis label. Full timestamps use `HH:mm:ss YYYY-MM-DD UTC`; compact axes retain
+UTC time and date. Hover or tap inspects intervals directly; there are no sliders
+or claims of keyboard chart selection. Native expandable exact-value tables give
+keyboard and assistive-technology users the same evidence. Controls, navigation
+and details retain visible keyboard focus.
+
+Compatible returned measurements are summed within selected intervals. Missing
+samples remain missing: all-missing intervals are unavailable, and incomplete
+subtotals have explicit sample counts and dotted outlines. Line segments connect
+only consecutive complete intervals; missing or partial intervals break the line.
+Measured zero retains a white baseline. Storage samples remain measured totals.
+Byte units are binary and execution duration is shown in seconds, with exact
+source units retained in tables. Counts do not establish successful collections,
+complete coverage or a success rate. Brief evidence warnings stay visible while
+technical methodology is expandable. Relative routes and snapshot URLs work
+under the same site base path.
 
 Retrieval errors are isolated by source. A snapshot can be valid and partial;
 `available` means the queries/selected sources were available, **not** complete
 historical coverage. Even an exhausted log query or successful metric query can
 omit delayed, missing, duplicated, expired or never-emitted records. Published
 coverage labels preserve that uncertainty. UTC publication older than two hours
-is stale, independently of observation retrieval and provider source/export ages.
+is labelled stale, independently of observation retrieval and provider source/export
+ages. A missing or invalid publication timestamp displays unavailable without an
+age; a timestamp more than one minute ahead of the device clock displays an explicit
+clock discrepancy, not a current publication or an unavailable timestamp. Neither
+state implies collection health or schedule configuration.
 `as_of_utc` records the retrieval cutoff; `published_at_utc` is set immediately
 before the successful atomic publication attempt, independently of that cutoff.
 The browser checks publication age every minute without additional network calls.
@@ -81,7 +123,7 @@ invocation still fails with `dashboard publication failed`.
 | Collector logs `FilterLogEvents` | Two queries (`persisted status=observed`, `REPORT`), each two-hour window, at most two pages of 100 events | At most four calls / 400 returned events; ascending service order, so a capped query may miss the newest events. Pagination truncation is explicit. No Insights scans or older log scans. |
 | Normalized evidence | At most three exact keys obtained from validated persistence UUIDs in those logs; 64 KiB maximum each | Read only `normalized/yata/jap/206/`. Validate schema, observed status, matching identity and timestamps. First valid newest-log candidate supplies freshness, not a guarantee of latest evidence. No bucket listing, raw reads, date/archive scanning or polling-control access. |
 | Previous public JSON | One GET, at most 192 KiB + overflow byte | Used only for ordering and conditional publication; invalid/oversized previous state fails closed. |
-| Publication | One PUT; JSON at most 192 KiB | Fixed key, no archive; three separately uploaded static assets. |
+| Publication | One PUT; JSON at most 192 KiB | Fixed key, no archive; five separately uploaded static assets. |
 
 At most 26 logical API calls (17 metrics + 4 logs + 3 evidence + 2 publication).
 SDK attempts are capped at two per operation, with 2-second connection and
@@ -116,8 +158,8 @@ delivered and failed notification samples. REPORT billed duration × memory / 10
 No REPORT matches means unavailable, not zero. Execution Duration is not billed
 duration. SNS metrics are not billable request counts or email-only delivery.
 Stored-log size, S3 actual request operations, CloudFront traffic, whole-account
-allowance consumption and actual bills remain unavailable. The UI gives conditional
-allowance references and the collector's operation model, not fabricated balances.
+allowance consumption and actual bills remain unavailable. The public UI presents
+measured resource trends rather than financial estimates.
 
 ## Incremental costs and assumptions
 
@@ -144,7 +186,7 @@ publisher requests alone are about $0.0040–$0.0049/month. Recheck Stockholm ra
 and storage class before deployment. Rates were verified in the public regional
 [S3 offer](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/current/eu-north-1/index.json)
 and [Lambda offer](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSLambda/current/eu-north-1/index.json)
-on 2026-10-10. Only one ≤192 KiB JSON and three small
+on 2026-10-10. Only one ≤192 KiB JSON and five small
 assets are stored; origin reads depend on public traffic and cache misses.
 Collector operation estimates and their skip/retry uncertainty are unchanged;
 see monitoring.md. Log storage/ingestion, S3 storage, API attempts outside remaining
@@ -167,7 +209,47 @@ remaining allowances or billing. Rates/terms checked 2026-10-10 against
 [CloudFront FAQ](https://aws.amazon.com/cloudfront/faqs/).
 Recheck before deployment; estimates are not actual billed amounts.
 
-## Offline validation and future deployment
+## Offline validation and production updates
+
+For frontend-only work, run `node tests/test_dashboard_frontend.cjs` and
+`git diff --check`; publisher packaging, SAM and unrelated cloud checks are not
+required when those files are unchanged.
+
+### Local visual review
+
+From the repository root in PowerShell, prepare an ignored preview directory:
+
+```powershell
+New-Item -ItemType Directory -Force .aws-sam/dashboard-preview | Out-Null
+Copy-Item dashboard/* .aws-sam/dashboard-preview/
+Copy-Item tests/fixtures/dashboard-preview.json .aws-sam/dashboard-preview/data.json
+New-Item -ItemType Directory -Force .aws-sam/dashboard-unavailable | Out-Null
+Copy-Item dashboard/* .aws-sam/dashboard-unavailable/
+Copy-Item tests/fixtures/dashboard-unavailable.json .aws-sam/dashboard-unavailable/data.json
+. ./.chatgpt/powershell-helpers.ps1
+Invoke-NativeCommand python @('-m', 'http.server', '8030', '--bind', '127.0.0.1', '--directory', '.aws-sam')
+```
+
+Open `http://127.0.0.1:8030/dashboard-preview/index.html` and
+`http://127.0.0.1:8030/dashboard-preview/diagnostics.html`, and
+`http://127.0.0.1:8030/dashboard-preview/usage.html`. Review all three at desktop
+and narrow widths (for example 1440 and 390 pixels). Follow navigation, load each
+route directly and refresh. Hover/tap chart intervals; change Period and Interval selectors and verify
+related charts update together. S3 storage must remain daily. Inspect exact-value
+tables for measured zero, missing and partial periods. Use Tab/Enter to open source details and
+exact evidence; focus should remain visible. Stop the server with
+Ctrl+C. The fixture is synthetic: 168 hourly slots, seven daily slots, unknown
+and zero samples, alternating zero/missing intervals (including an isolated
+missing minute), error-hour timing, variable storage/log consumption
+and partial log pagination despite source
+availability. Its fixed timestamps deliberately become stale; it is not live
+collection evidence. The same three routes under `/dashboard-unavailable/`
+provide unavailable-source previews. To review missing/network failure, temporarily rename
+the preview's `data.json` and reload. Never upload this fixture to production.
+
+Independent visual review and production deployment remain separate steps.
+
+### Publisher and infrastructure validation
 
 Run from the repository root:
 
@@ -185,17 +267,26 @@ come from the Lambda runtime; no vendored dependency is needed. Production
 packaging should use committed LF source, following the existing collector release
 practice, after review and commit. Do not deploy an unreviewed working tree.
 
-After separate deployment authorization: package this template independently,
-deploy a new stack in eu-north-1 with ScheduleState DISABLED, and pass the existing
-collector stack's evidence bucket, function, log group, metric namespace and SNS
-**topic name** (not its ARN) as parameters. Do not update the collector stack.
-Upload `dashboard/index.html`, `styles.css`, `app.js` only to corresponding
+After separate authorization, distinguish a static frontend update from an
+infrastructure or publisher update. A frontend-only update uploads reviewed static
+assets to the existing dashboard stack; it does not require recreating the stack,
+invoking the publisher, changing IAM or changing scheduling. For a separately
+authorized initial bootstrap, package this template independently and create a
+dashboard stack in eu-north-1 with ScheduleState DISABLED, using the collector
+stack's evidence bucket, function, log group, metric namespace and SNS **topic name**
+(not its ARN). For infrastructure updates, inspect existing resources, parameters
+and scheduling before preparing a change set. Do not update the collector stack.
+Upload `dashboard/index.html`, `diagnostics.html`, `usage.html`, `styles.css`,
+and `app.js` only to corresponding
 `public/` keys with correct MIME types and five-minute cache control. Do not upload
-repository source or evidence. Invoke publisher once, inspect the sanitized JSON
-and browser, verify direct S3 access denied / HTTPS CloudFront read works, then
-enable this stack's hourly rule. No AWS resources have been deployed or account
-telemetry queried during offline implementation. Deployment, live permissions, telemetry availability, caching and
-provider failures need separately authorized verification.
+repository source or evidence. Verify all three direct routes, navigation,
+snapshot loading and cache behavior after an authorized update. Initial bootstrap
+also requires authorized publisher invocation and verification of private S3 /
+HTTPS CloudFront access.
+Enable this stack's hourly rule only after separate authorization for activation.
+Offline frontend checks do not establish deployed revision, live permissions,
+telemetry availability, caching or provider behavior. Those need separately
+authorized verification; no deployment state is inferred from local files.
 
 If publication stops, retain the previous JSON and show stale publication after
 two hours. Operators use private publisher logs and existing Lambda metrics;
