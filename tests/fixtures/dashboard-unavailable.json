@@ -1,0 +1,139 @@
+{
+  "schema_version": 1,
+  "state": "partial",
+  "published_at_utc": "2026-10-14T17:55:00Z",
+  "as_of_utc": "2026-10-14T17:55:00Z",
+  "window": {
+    "start_utc": "2026-10-07T17:00:00Z",
+    "end_utc": "2026-10-14T17:00:00Z",
+    "timezone": "UTC"
+  },
+  "metrics": {
+    "persisted_events": {
+      "state": "unavailable",
+      "samples": [],
+      "unit": "Count",
+      "coverage": "query unavailable",
+      "provenance": "synthetic unavailable preview"
+    },
+    "collector_invocations": {
+      "state": "unavailable",
+      "samples": [],
+      "unit": "Count",
+      "coverage": "query unavailable",
+      "provenance": "synthetic unavailable preview"
+    },
+    "collector_errors": {
+      "state": "unavailable",
+      "samples": [],
+      "unit": "Count",
+      "coverage": "query unavailable",
+      "provenance": "synthetic unavailable preview"
+    },
+    "halt_events": {
+      "state": "unavailable",
+      "samples": [],
+      "unit": "Count",
+      "coverage": "query unavailable",
+      "provenance": "synthetic unavailable preview"
+    },
+    "collector_throttles": {
+      "state": "unavailable",
+      "samples": [],
+      "unit": "Count",
+      "coverage": "query unavailable",
+      "provenance": "synthetic unavailable preview"
+    },
+    "publisher_invocations": {
+      "state": "unavailable",
+      "samples": [],
+      "unit": "Count",
+      "coverage": "query unavailable",
+      "provenance": "synthetic unavailable preview"
+    },
+    "publisher_errors": {
+      "state": "unavailable",
+      "samples": [],
+      "unit": "Count",
+      "coverage": "query unavailable",
+      "provenance": "synthetic unavailable preview"
+    },
+    "publisher_throttles": {
+      "state": "unavailable",
+      "samples": [],
+      "unit": "Count",
+      "coverage": "query unavailable",
+      "provenance": "synthetic unavailable preview"
+    },
+    "sns_NumberOfMessagesPublished": {
+      "state": "unavailable",
+      "samples": [],
+      "unit": "Count",
+      "coverage": "query unavailable",
+      "provenance": "synthetic unavailable preview"
+    },
+    "sns_NumberOfNotificationsDelivered": {
+      "state": "unavailable",
+      "samples": [],
+      "unit": "Count",
+      "coverage": "query unavailable",
+      "provenance": "synthetic unavailable preview"
+    },
+    "sns_NumberOfNotificationsFailed": {
+      "state": "unavailable",
+      "samples": [],
+      "unit": "Count",
+      "coverage": "query unavailable",
+      "provenance": "synthetic unavailable preview"
+    },
+    "collector_duration": {
+      "state": "unavailable",
+      "samples": [],
+      "unit": "Milliseconds",
+      "coverage": "query unavailable",
+      "provenance": "synthetic unavailable preview"
+    },
+    "publisher_duration": {
+      "state": "unavailable",
+      "samples": [],
+      "unit": "Milliseconds",
+      "coverage": "query unavailable",
+      "provenance": "synthetic unavailable preview"
+    },
+    "log_ingestion": {
+      "state": "unavailable",
+      "samples": [],
+      "unit": "Bytes",
+      "coverage": "query unavailable",
+      "provenance": "synthetic unavailable preview"
+    },
+    "s3_BucketSizeBytes": {
+      "state": "unavailable",
+      "samples": [],
+      "unit": "Bytes",
+      "coverage": "query unavailable",
+      "provenance": "synthetic unavailable preview"
+    },
+    "s3_NumberOfObjects": {
+      "state": "unavailable",
+      "samples": [],
+      "unit": "Count",
+      "coverage": "query unavailable",
+      "provenance": "synthetic unavailable preview"
+    }
+  },
+  "freshness": {
+    "state": "unavailable",
+    "coverage": "evidence unavailable"
+  },
+  "recent_heartbeat": {
+    "state": "unavailable",
+    "samples": [],
+    "coverage": "query unavailable"
+  },
+  "recent_gaps": [],
+  "billed_compute": {
+    "state": "unavailable",
+    "value": null
+  }
+}
