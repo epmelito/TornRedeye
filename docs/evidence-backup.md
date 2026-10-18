@@ -3,8 +3,8 @@
 [Issue #19](https://github.com/epmelito/TornRedeye/issues/19) provides offline-tested
 tooling in `evidence_backup.py`. Passing synthetic tests does **not** establish
 that a live backup exists. Manual baseline and incremental backups and recovery
-verification have completed. The OIDC/`rcl` scheduled integration remains
-unverified live and disabled.
+verification have completed. Verified scheduled-backup milestones are recorded
+under [scheduled operation](#scheduled-operation-disabled-by-default).
 The [evidence continuity requirements](aws-cost-protection.md#evidence-continuity-and-recovery-requirements)
 remain authoritative for storage ownership, independent copies and recovery.
 
@@ -435,17 +435,17 @@ representative success/failure/empty/raw-only tests, then measure recovery gaps
 and duration. Preserve embedded original bucket/key references. Do not restore
 stale polling control or clear a halt automatically; use
 [deployment recovery safeguards](deployment.md#polling-safeguards-and-recovery).
-No restore command or external synchronization is provided here. The disabled
-daily integration is described under [scheduled operation](#scheduled-operation-disabled-by-default).
+No restore command is provided here. The daily integration is described under
+[scheduled operation](#scheduled-operation-disabled-by-default).
 
 ## Incremental backup: immutable batch completion (Issue #23)
 
 AWS S3 is primary; Azure Blob is the sole persistent external evidence copy.
 `incremental_backup.py` and `incremental_transfer.py` are offline-testable,
 SDK-free functions with injected clients. `incremental_runner.py` adds the thin
-S3/Azure provider adapters and explicitly gated executable described below. The
-daily GitHub Actions integration is defined but disabled; its OIDC authentication,
-generated `rcl` SAS and hosted-runner execution remain unverified live.
+S3/Azure provider adapters and explicitly gated executable described below. For
+the daily GitHub Actions integration and its verified milestones, see
+[scheduled operation](#scheduled-operation-disabled-by-default).
 Run exactly one publisher at a time. There is no remote index, mutable root, root snapshot,
 compare-and-swap publication or remote index partitioning.
 
@@ -737,14 +737,14 @@ persisted-archive verification; they cannot be silently trusted as schema-2 cove
 
 A complete enumeration is not a globally atomic multiwriter snapshot. The former
 root/CAS ordering guarantee is deliberately removed; serialize the publisher and
-keep evidence/manifest writes create-only. The later Azure integration must exclude
+keep evidence/manifest writes create-only. The Azure integration must exclude
 these artifacts from deletion/expiry and authenticate the writer. With no retained
 root/history authority, disappearance of every artifact of a batch cannot be
 detected from enumeration alone; neither checksums nor create-only writes protect
 against privileged deletion or forged completion records. Failure to list, parse, validate or fit
 resource limits is visible (`complete=False`, bounded sanitized error and counters).
 A complete job never claims a consistent cutoff. Hard process termination may leave
-private ephemeral scratch for the later runner to clean; it is not a backup copy.
+private ephemeral scratch for runner cleanup; it is not a backup copy.
 
 ### Offline-tested operational entry point (Slice 3)
 
@@ -821,11 +821,20 @@ operations; they do not forcibly interrupt a stalled/drip-fed SDK or socket call
 Offline validation uses fake SDK clients and fake HTTPS connections exclusively. Provider
 response formats, pagination, error mapping, bounded streams, conditional writes,
 source ownership, baseline failure, entry-point exit codes, corrupt readback,
-lost acknowledgement and verified restart are exercised offline. Completed manual
-backup and recovery verification does not establish the scheduled integration's
-OIDC authentication, generated `rcl` permissions or hosted-runner compatibility.
+lost acknowledgement and verified restart are exercised offline. Those tests alone
+do not establish OIDC authentication, generated `rcl` permissions or hosted-runner
+compatibility; completed live verification is recorded below.
 
 ### Scheduled operation: disabled by default
+
+The first unattended scheduled backup was
+[verified on October 14, 2026](https://github.com/epmelito/TornRedeye/issues/23#issuecomment-6173917639),
+including AWS/Azure OIDC authentication, persisted-evidence verification and an
+independent Azure inventory. Subsequent scheduled runs succeeded through
+[October 18, 2026](https://github.com/epmelito/TornRedeye/actions/runs/39110394657);
+that run completed both OIDC logins and the generated-SAS verified-backup step.
+These are dated operational milestones, not guarantees of future execution or
+complete recovery coverage. The configuration remains disabled by default:
 
 `.github/workflows/daily-backup.yml` defines 03:23 UTC daily execution and manual
 dispatch, both gated by the repository Actions variable `DAILY_BACKUPS_ENABLED`
@@ -876,9 +885,10 @@ authorized private diagnostic session, never by printing captured output in Acti
 
 #### Cloud identities and permissions
 
-Configuration below is for subsequent separately approved setup, not commands
-to execute during offline implementation. Use no AWS access-key secret, Azure
-client secret, account key or stored SAS.
+The requirements below remain applicable to future separately approved setup or
+identity changes; initial scheduled operation has been verified as recorded above.
+These are not commands to execute during offline implementation. Use no AWS
+access-key secret, Azure client secret, account key or stored SAS.
 
 Use issuer `https://token.actions.githubusercontent.com` for both providers.
 GitHub's [current OIDC reference](https://docs.github.com/en/actions/reference/security/oidc#immutable-subject-claims)
@@ -892,10 +902,11 @@ case-sensitive subject for this job (which uses no GitHub environment) is:
 repo:epmelito@188345459/TornRedeye@1409429829:ref:refs/heads/main
 ```
 
-This is an inference from current GitHub requirements and repository metadata,
-not an observed JWT. Repository subject customization could change it. Access to
-the repository OIDC customization endpoint was unavailable through the read-only
-connector used for this implementation. Before cloud setup/activation, inspect
+At implementation time, this subject was inferred from GitHub requirements and
+repository metadata, not an observed JWT. Repository subject customization could
+change it. Access to the repository OIDC customization endpoint was unavailable
+through the read-only connector used for implementation. Before future cloud
+setup, reactivation or trust changes, inspect
 the repository Actions OIDC settings (or authenticated read-only
 `GET /repos/epmelito/TornRedeye/actions/oidc/customization/sub`) and confirm the
 effective subject. If a separately approved token check is needed, compare only
@@ -949,13 +960,18 @@ prefix-level cloud authorization boundary. Both identities trust default-branch
 jobs generally, so protect `main` and review changes to code/workflows that can
 request OIDC tokens; the activation variable is an operational gate, not IAM.
 
-#### Configuration and later activation
+#### Configuration and activation procedure
+
+Initial activation and live verification have completed as recorded under
+[scheduled operation](#scheduled-operation-disabled-by-default). The following
+setup and activation guidance is retained for future approved changes or
+reactivation, not as a statement that the existing integration is inactive.
 
 Repository Actions variables (no credential secrets):
 
 | Variable | Required value |
 | --- | --- |
-| `DAILY_BACKUPS_ENABLED` | Unset or `false` until separately approved; then exactly `true` |
+| `DAILY_BACKUPS_ENABLED` | Exactly `true` enables eligible scheduled/manual jobs; unset or `false` skips them. Future configuration changes require applicable approval. |
 | `BACKUP_AWS_ROLE_ARN` | Dedicated read-only OIDC role ARN |
 | `BACKUP_AWS_OWNER` | Expected 12-digit canonical bucket/account owner |
 | `BACKUP_AWS_REGION` | Canonical bucket region (`eu-north-1` for current deployment) |
@@ -967,8 +983,9 @@ Repository Actions variables (no credential secrets):
 | `BACKUP_AZURE_CONTAINER` | Existing private backup container (`tornredeye-backups`) |
 | `BACKUP_BASELINE_CATALOG_SHA256` | Independently verified lowercase catalog **value** digest, not archive/file SHA-256 |
 
-Before scheduled activation, separately approve OIDC identity configuration and
-live OIDC/`rcl` integration verification. Reuse the verified baseline/catalog pin; check
+Before future setup, reactivation or identity changes, separately approve OIDC
+identity configuration and live OIDC/`rcl` integration verification. Reuse the
+verified baseline/catalog pin; check
 network/firewall access from a hosted runner, retention of batch artifacts, and
 the selected identity permissions. Confirm installed Azure CLI token shape/expiry
 and read/create/list interoperability, including existing-blob conditional PUT
@@ -977,16 +994,17 @@ tests cannot establish those live contracts; do not broaden permissions to hide
 an authorization/error-mapping problem. Account SAS expiration policy may need to
 accept the 80-minute signed interval (five-minute skew plus 75-minute lifetime).
 
-After review/merge through the separate GitHub workflow, keep the variable disabled
-while configuring the approved identities/variables and checking effective subject
+For future separately approved setup or reactivation, after review/merge through
+the separate GitHub workflow, keep the variable disabled while configuring the
+approved identities/variables and checking effective subject
 matching. Once live execution/recurring operation is explicitly approved, set the
-gate to `true` and manually dispatch **main** for a verified first run; enabling
-the gate also permits the next daily schedule, so coordinate that window. Check
+gate to `true` and manually dispatch **main** to verify that setup or reactivation;
+enabling the gate also permits the next daily schedule, so coordinate that window. Check
 Actions outcome and privately verify the expected persisted evidence. Set the
 gate to `false` to stop future jobs; it does not stop one already running. Do not
-run a second local publisher while a job is active. The scheduled integration has
-not been activated or verified live; completed manual recovery verification does
-not establish OIDC/`rcl` scheduled compatibility.
+run a second local publisher while a job is active. The dated verification above
+establishes the completed scheduled-integration milestone; future configuration
+changes and recovery operations still require their applicable approvals.
 
 ### Resource bounds and cost comparison
 
