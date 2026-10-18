@@ -111,3 +111,4 @@ without changing the live Japan collector or writing new evidence.
 - [Backups, verification and recovery](docs/evidence-backup.md)
 - [Public operations dashboard](docs/dashboard.md)
 - [Offline all-stock normalization](docs/stock-normalization.md)
+- [Local stock history (Hawaii Shark Fin example)](docs/stock-history.md)
