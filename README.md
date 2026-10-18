@@ -2,17 +2,21 @@
 
 Torn is an online browser-based game with overseas shops where players buy items.
 TornRedeye tracks foreign stock availability in those shops to learn when they
-restock and how quickly their stock sells out. The system currently monitors one stock listing in Japan using data from YATA.
+restock and how quickly their stock sells out. The operational AWS collector
+normalizes one stock listing in Japan and retains complete YATA travel exports
+for offline analysis across countries and items.
 
 The aim is to use that history to find recurring patterns and eventually
-estimate when stock might return. Later analysis needs to account for gaps and
+estimate when stock might return. Analysis needs to account for gaps and
 cached responses in that history.
 
 ## How it works
 
 The collector saves original responses and processed records in S3, building a
 history of foreign stock availability. Monitoring follows collection health,
-while backups keep a separate copy in Azure.
+while scheduled backups keep an independently verified copy in Azure. A public
+three-page dashboard reports operations, diagnostics and infrastructure usage.
+Local tools normalize complete exports and analyze observed stock history.
 
 ```mermaid
 flowchart TD
@@ -21,12 +25,15 @@ flowchart TD
     collector --> history["S3: raw and processed records"]
     collector --> monitoring["CloudWatch logs and alarms"]
     monitoring --> notifications["SNS notifications"]
-    history --> backup["GitHub Actions: verified backup run"]
+    history --> backup["GitHub Actions: daily backups"]
     backup --> azure["Azure Blob Storage"]
-    history -.-> analysis["Analysis and forecasting: planned"]
+    history --> publisher["Hourly snapshot publisher"]
+    publisher --> dashboard["Public three-page operations dashboard"]
+    local["Selected local evidence"] --> analysis["Offline normalization and stock history"]
+    analysis -.-> forecasting["Forecasting: planned"]
 ```
 
-Solid arrows show implemented paths; the dotted branch is planned analysis.
+Solid arrows show implemented paths; the dotted branch is planned forecasting.
 
 ## Technology stack
 
@@ -80,13 +87,19 @@ resources, so their configuration is reviewed alongside the code.
 
 ## Current progress
 
-The live AWS collection system is operational. The GitHub-hosted backup has
-completed a [successful live run](https://github.com/epmelito/TornRedeye/actions/runs/38479321439)
-and verified its stored evidence. Recurring unattended execution is still
-awaiting its first scheduled-run verification.
+The AWS collection system is operational. The independent Azure backup's
+[first unattended scheduled run was verified on October 14, 2026](https://github.com/epmelito/TornRedeye/issues/23#issuecomment-6173917639),
+with subsequent successful scheduled runs through
+[October 18, 2026](https://github.com/epmelito/TornRedeye/actions/runs/39110394657).
 
-The public operations dashboard is not yet complete. Foreign stock forecasting
-is still planned; the project does not yet produce restock predictions.
+The public dashboard is deployed with Operations, Diagnostics, and
+Infrastructure & Usage pages. Hourly scheduled publication was
+[verified on October 15, 2026](https://github.com/epmelito/TornRedeye/issues/10#issuecomment-6198958432).
+
+Offline all-stock normalization and
+[reusable local stock-history analysis](https://github.com/epmelito/TornRedeye/pull/35)
+are implemented. These are local analysis tools; forecasting and restock
+predictions remain unimplemented.
 
 ## Running locally
 
