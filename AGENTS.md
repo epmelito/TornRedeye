@@ -32,6 +32,12 @@ default.
 
 - Implement the smallest complete change. Fix observed problems, not hypothetical
   future problems.
+- Design functionality around the reusable operation, not just its first use
+  case. When behavior naturally applies across items, countries, datasets, or
+  similar inputs, prefer simple parameters and shared implementations over
+  separate case-specific scripts, tests, and documentation. Keep genuinely unique
+  behavior specific. Do not introduce abstractions, frameworks, or configuration
+  solely for hypothetical future needs.
 - Preserve working ingestion and persistence behavior unless the active issue
   requires a change. Do not refactor stable code solely to remove duplication.
 - Do not add frameworks, abstractions, dependencies, additional providers,
