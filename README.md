@@ -99,9 +99,15 @@ python -B -m unittest discover -s tests
 No cloud credentials are needed; the suite uses synthetic data and fake cloud
 clients. See the links below for deployment and operating instructions.
 
+The separate [offline all-stock normalizer](docs/stock-normalization.md) can
+process every returned country and item from retained YATA export bytes. It
+preserves raw evidence identity and timestamps and reports partial validation
+without changing the live Japan collector or writing new evidence.
+
 ## Further information
 
 - [Deployment and operation](docs/deployment.md)
 - [Monitoring, alerts and resource use](docs/monitoring.md)
 - [Backups, verification and recovery](docs/evidence-backup.md)
 - [Public operations dashboard](docs/dashboard.md)
+- [Offline all-stock normalization](docs/stock-normalization.md)
