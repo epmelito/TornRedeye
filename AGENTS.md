@@ -9,17 +9,17 @@ sellout patterns, and probabilistic forecasting. Do not expand the project into
 new data sources, prediction methods, hosted services, or user interfaces unless
 the approved work requires them.
 
-The active GitHub issue defines the work package scope. For explicitly approved
-bootstrap work without an issue, follow that confirmed scope instead. Accepted
-decisions define durable constraints. Current code, tests, and configuration
-establish implementation behavior. Do not let stale documentation or handoffs
-override them.
+The active GitHub issue and explicit user-approved scope clarifications define
+the work package. For explicitly approved bootstrap work without an issue, follow
+that confirmed scope instead. Accepted decisions define durable constraints.
+Current code, tests, and configuration establish implementation behavior. Do not
+let stale documentation or handoffs override them.
 
 ## Default context
 
 For normal work, read only:
 
-- the active issue or approved bootstrap scope
+- the active issue and approved scope clarifications, or approved bootstrap scope
 - this file and the applicable `.agents/skills/*/SKILL.md` files
 - affected code and focused tests, when present
 - directly relevant source contracts, configuration, and documentation
@@ -54,9 +54,8 @@ default.
   corruption, hidden partial failures, or fabricated fallback values.
 - Do not modify unrelated files or describe planned behavior as implemented.
 
-For the MVP, safe means protecting credentials, source evidence, data integrity,
-and the ability to diagnose failures. It does not mean implementing every future
-production concern.
+The safeguards above remain mandatory. Add safeguards when approved scope and
+credible risks require them; do not implement speculative production concerns.
 
 ## Implementation and validation
 
@@ -77,6 +76,13 @@ Reuse credible results rather than rerunning unchanged broad checks.
 Follow the `engineering` skill for implementation, testing, security, reporting,
 and bounded review details. Follow `github-workflow` for branch, issue, commit,
 pull request, and finalization procedures.
+
+Load [data-science](.agents/skills/data-science/SKILL.md) for research design,
+statistical inference, forecasting methodology, model evaluation, or review of
+analytical claims. It owns scientific validity; `engineering` owns software and
+data-contract correctness. Use both when implementing analytical methods. Routine
+parsing, ETL, exact aggregation, and presentation-only changes do not by themselves
+require `data-science`.
 
 Load [reporting-engineering](.agents/skills/reporting-engineering/SKILL.md)
 alongside `engineering` when implementing or reviewing user-facing reports,
@@ -113,7 +119,7 @@ When supplying local PowerShell commands to the user, use the canonical helpers
 in `.chatgpt/powershell-helpers.ps1` for captured command evidence. They are not
 requirements for application code or the agent's own execution environment.
 
-Reuse recorded validation evidence. Do not merge unless explicitly authorized.
+Do not merge unless explicitly authorized.
 
 ## Handoffs
 
