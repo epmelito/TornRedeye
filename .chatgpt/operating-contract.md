@@ -224,6 +224,13 @@ Codex normally owns direct repository implementation after material decisions
 are settled and when the user selects Codex mode. Codex must not silently
 redefine approved methodology, architecture, scope, or acceptance criteria.
 
+For substantive empirical research, ChatGPT frames competing hypotheses,
+evidence requirements, and evaluation criteria. When hands-on analysis is needed,
+Codex runs bounded, reproducible experiments using verified data and applicable
+skills, reporting methods, uncertainty, contrary evidence, and limitations.
+ChatGPT challenges the findings before recommending further experiments or
+implementation. Routine calculations need no research ceremony.
+
 In manual patch mode, ChatGPT owns private patch generation and validation. The
 user applies patches and runs local commands against the verified checkout.
 
