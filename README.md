@@ -16,6 +16,30 @@ uncertainty. Machine learning remains a potential later improvement, evaluated
 against historical backtesting results. These forecasting capabilities and
 automatic forecast updates are planned, not implemented.
 
+## Delivery roadmap
+
+TornRedeye advances toward useful, evidence-backed stock availability forecasts through delivery milestones, not fixed dates or arbitrary sample-size thresholds. Hawaii Shark Fin is the initial research case, not a permanent architectural boundary. Existing data collection and backup continue throughout.
+
+1. **Evidence foundation.** Collect, preserve, verify, and prepare historical stock observations. **Exit:** Traceable evidence and reusable stock-history processing are available.
+
+2. **Forecasting target selection.** Determine which outcomes the observations can credibly predict, including limitations of inferred replenishment events. **Exit:** A defined prediction target, forecast horizons, and a defensible evaluation approach.
+
+3. **Offline forecasting baseline.** Produce initial probabilistic forecasts for Hawaii Shark Fin and compare them against feasible simple alternatives. **Exit:** Reproducible predictions, historical evaluation, and clearly reported uncertainty. Production accuracy is not assumed.
+
+4. **Forward validation.** Evaluate a selected approach against subsequently collected observations that did not inform its selection. Examine forecast reliability, calibration, and performance against simple baselines. **Exit:** Evidence supporting practical usefulness, or a documented reason to revise the target or method.
+
+5. **Useful forecasting MVP.** Make sufficiently supported forecasts available through the existing reporting system, including probability, horizon, evidence freshness, and uncertainty. **Exit:** Users can interpret predictions to inform stock-purchasing or travel decisions, with insufficient-evidence outcomes where necessary.
+
+6. **Generalization and improvement.** Extend shared forecasting methods across supported country/item pairs and multiple future replenishment cycles. Introduce more sophisticated methods only when justified by evidence. **Exit:** Broader coverage with measured reliability, without separate hardcoded forecasting systems for individual items.
+
+### Progression principles
+
+- Substantive research should resolve a decision affecting the next deliverable. Do not repeatedly analyze the same exploratory sample without a consequential question.
+- Build and measure simple baselines early. Distinguish exploratory historical findings from independently validated forecasting performance.
+- Advance based on demonstrated milestone outcomes, not calendar age or raw observation counts. New evidence may justify revisiting earlier decisions.
+- Prioritize reusable country/item forecasting capabilities over special-purpose solutions or speculative infrastructure.
+- Preserve uncertainty and explicitly report insufficient evidence. Never present inferred events or unvalidated forecasts as established facts.
+- Treat milestones as product direction, not a backlog of issues to open in advance. Active GitHub issues define bounded work packages.
 ## How it works
 
 The collector saves original responses and processed records in S3, building a
