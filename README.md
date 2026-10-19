@@ -40,6 +40,7 @@ TornRedeye advances toward useful, evidence-backed stock availability forecasts 
 - Prioritize reusable country/item forecasting capabilities over special-purpose solutions or speculative infrastructure.
 - Preserve uncertainty and explicitly report insufficient evidence. Never present inferred events or unvalidated forecasts as established facts.
 - Treat milestones as product direction, not a backlog of issues to open in advance. Active GitHub issues define bounded work packages.
+
 ## How it works
 
 The collector saves original responses and processed records in S3, building a
