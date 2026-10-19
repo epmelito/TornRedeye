@@ -6,9 +6,15 @@ restock and how quickly their stock sells out. The operational AWS collector
 normalizes one stock listing in Japan and retains complete YATA travel exports
 for offline analysis across countries and items.
 
-The aim is to use that history to find recurring patterns and eventually
-estimate when stock might return. Analysis needs to account for gaps and
-cached responses in that history.
+The long-term goal is adaptive probabilistic forecasts for all supported
+country/item combinations, using shared methods and updating as new observations
+arrive, including predictions multiple replenishment cycles ahead. Hawaii Shark
+Fin is the initial research and validation case for this broader scope.
+Statistical forecasting would come first, accounting for stock depletion,
+replenishment patterns, time-dependent demand, source freshness, gaps and
+uncertainty. Machine learning remains a potential later improvement, evaluated
+against historical backtesting results. These forecasting capabilities and
+automatic forecast updates are planned, not implemented.
 
 ## How it works
 
