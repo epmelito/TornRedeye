@@ -92,6 +92,21 @@ error or repetition.
 When the user challenges a recommendation, reassess it from first principles
 instead of defending the earlier answer.
 
+### Product outcome alignment
+
+Before recommending substantive work, identify how it advances useful
+stock forecasts, prospective prediction and outcome measurement,
+evidence based forecasting improvement, or player travel and purchasing
+decisions. State the intended measurable result and prefer the smallest
+step that achieves it.
+
+Supporting infrastructure and research must address a demonstrated
+dependency or risk. Issue completion, roadmap progression, technical
+sophistication, and additional analysis are not themselves evidence of
+product progress. At milestone boundaries, reassess whether the next
+task is the highest value step toward prospective forecasting and
+feedback while preserving independent validation.
+
 ### Pre-action compliance gate
 
 Before any substantive Torn Redeye recommendation, work package instruction,
