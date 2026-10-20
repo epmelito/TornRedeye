@@ -13,7 +13,7 @@ Fin is the initial research and validation case for this broader scope.
 Statistical forecasting would come first, accounting for stock depletion,
 replenishment patterns, time-dependent demand, source freshness, gaps and
 uncertainty. Machine learning remains a potential later improvement, evaluated
-against historical backtesting results. These forecasting capabilities and
+against historical backtesting results. These adaptive forecasting capabilities and
 automatic forecast updates are planned, not implemented.
 
 ## Delivery roadmap
@@ -129,8 +129,10 @@ Infrastructure & Usage pages. Hourly scheduled publication was
 
 Offline all-stock normalization and
 [reusable local stock-history analysis](https://github.com/epmelito/TornRedeye/pull/35)
-are implemented. These are local analysis tools; forecasting and restock
-predictions remain unimplemented.
+are implemented. An [offline availability baseline](docs/availability-forecast.md)
+compares an expanding empirical probability with last observed state persistence
+at a 60 minute horizon. It supports local historical experimentation; production
+forecasts and exact restock predictions remain unimplemented.
 
 ## Running locally
 
@@ -156,3 +158,4 @@ without changing the live Japan collector or writing new evidence.
 - [Public operations dashboard](docs/dashboard.md)
 - [Offline all-stock normalization](docs/stock-normalization.md)
 - [Local stock history (Hawaii Shark Fin example)](docs/stock-history.md)
+- [Offline availability forecasting baseline](docs/availability-forecast.md)
