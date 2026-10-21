@@ -132,7 +132,10 @@ Offline all-stock normalization and
 are implemented. An [offline availability baseline](docs/availability-forecast.md)
 compares an expanding empirical probability with last observed state persistence
 at a 60 minute horizon. It supports local historical experimentation; production
-forecasts and exact restock predictions remain unimplemented.
+forecasts and exact restock predictions remain unimplemented. A separate
+[private shadow forecasting consumer](docs/shadow-forecast.md) reuses the offline
+accounting core and existing S3 evidence. Its independent AWS definition defaults
+to disabled; deployment and activation require separate authorization.
 
 ## Running locally
 
