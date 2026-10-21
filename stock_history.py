@@ -25,6 +25,33 @@ def _utc(value):
     return value.isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
+def normalized_target_fields(normalized, retrieved, country, item_id):
+    """Shared target validation for retained raw exports, without I/O."""
+    row = {"issues": [], "quantity": None, "name": None, "cost": None}
+    row["normalization_status"] = normalized["status"]
+    row["diagnostics"] = normalized["diagnostics"]
+    row["export_timestamp"] = normalized["export_timestamp"]
+    country_record = normalized["countries"].get(country, {})
+    row["source_timestamp"] = country_record.get("source_timestamp")
+    item = next((item for item in country_record.get("items", []) if item["item_id"] == item_id), None)
+    if item is None:
+        row["issues"].append("target_missing_or_invalid")
+    else:
+        row.update({k: item[k] for k in ("quantity", "name", "cost")})
+        if any(item[k] is None for k in ("quantity", "name", "cost")):
+            row["issues"].append("invalid_target_fields")
+    for field in ("source", "export"):
+        stamp = row[field + "_timestamp"]
+        if stamp is None or (field == "source" and stamp == 0):
+            row["issues"].append(field + "_time_unknown")
+        else:
+            age = retrieved.timestamp() - stamp
+            row[field + "_age_seconds"] = age
+            if age < 0:
+                row["issues"].append(field + "_time_in_future")
+    return row
+
+
 def _row(root, member, country, item_id):
     row = {"receipt": member, "retrieved_at": None, "raw_evidence": None,
            "collection_id": None, "http_status": None, "collection_status": None,
@@ -74,27 +101,7 @@ def _row(root, member, country, item_id):
         if (normalized["raw_evidence"]["sha256"] != receipt["sha256"]
                 or len(raw) != receipt["size"]):
             raise ValueError("raw evidence changed during read")
-        row["normalization_status"] = normalized["status"]
-        row["diagnostics"] = normalized["diagnostics"]
-        row["export_timestamp"] = normalized["export_timestamp"]
-        country_record = normalized["countries"].get(country, {})
-        row["source_timestamp"] = country_record.get("source_timestamp")
-        item = next((item for item in country_record.get("items", []) if item["item_id"] == item_id), None)
-        if item is None:
-            row["issues"].append("target_missing_or_invalid")
-        else:
-            row.update({k: item[k] for k in ("quantity", "name", "cost")})
-            if any(item[k] is None for k in ("quantity", "name", "cost")):
-                row["issues"].append("invalid_target_fields")
-        for field in ("source", "export"):
-            stamp = row[field + "_timestamp"]
-            if stamp is None or (field == "source" and stamp == 0):
-                row["issues"].append(field + "_time_unknown")
-            else:
-                age = retrieved.timestamp() - stamp
-                row[field + "_age_seconds"] = age
-                if age < 0:
-                    row["issues"].append(field + "_time_in_future")
+        row.update(normalized_target_fields(normalized, retrieved, country, item_id))
     except (backup.BackupError, OSError, ValueError, KeyError, TypeError, AttributeError,
             RecursionError, OverflowError):
         row["issues"].append("invalid_receipt_payload_or_retrieval_context")

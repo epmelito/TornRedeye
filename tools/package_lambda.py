@@ -10,9 +10,9 @@ MODULES = ("lambda_function.py", "s3_persistence.py", "yata_collector.py", "poll
 ARTIFACT = ROOT / ".aws-sam" / "collector.zip"
 
 
-def package(destination: Path = ARTIFACT) -> Path:
+def package(destination: Path = ARTIFACT, *, modules=None) -> Path:
     """Replace a generated ZIP atomically; never traverse the repository."""
-    sources = {name: (ROOT / name).read_bytes() for name in MODULES}
+    sources = {name: (ROOT / name).read_bytes() for name in (MODULES if modules is None else modules)}
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = None
     try:

@@ -1,0 +1,252 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Transform": "AWS::Serverless-2016-10-31",
+  "Description": "Independent private Hawaii shadow consumer; deployment requires separate authorization",
+  "Parameters": {
+    "EvidenceBucket": {
+      "Type": "String",
+      "AllowedPattern": "[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]"
+    },
+    "ScheduleState": {
+      "Type": "String",
+      "Default": "DISABLED",
+      "AllowedValues": [
+        "DISABLED",
+        "ENABLED"
+      ]
+    }
+  },
+  "Rules": {
+    "StockholmOnly": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Equals": [
+              {
+                "Ref": "AWS::Region"
+              },
+              "eu-north-1"
+            ]
+          },
+          "AssertDescription": "Approved region is eu-north-1"
+        }
+      ]
+    }
+  },
+  "Resources": {
+    "ConsumerLogGroup": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/tornredeye/${AWS::StackName}/shadow"
+        },
+        "RetentionInDays": 14
+      }
+    },
+    "ConsumerRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "PrivateShadowOnly",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:ListBucket"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:s3:::${EvidenceBucket}"
+                  },
+                  "Condition": {
+                    "StringEquals": {
+                      "s3:prefix": [
+                        "raw/yata/jap/206/",
+                        "normalized/yata/jap/206/"
+                      ]
+                    }
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:s3:::${EvidenceBucket}/raw/yata/jap/206/*"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:s3:::${EvidenceBucket}/normalized/yata/jap/206/*"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:s3:::${EvidenceBucket}/shadow/haw/1485/v1/*"
+                    }
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:PutObject"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:s3:::${EvidenceBucket}/shadow/haw/1485/v1/*"
+                  },
+                  "Condition": {
+                    "StringEquals": {
+                      "s3:if-none-match": "*"
+                    }
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:PutObject"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:s3:::${EvidenceBucket}/shadow/haw/1485/v1/head.json"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:s3:::${EvidenceBucket}/shadow/haw/1485/v1/lease.json"
+                    }
+                  ],
+                  "Condition": {
+                    "Null": {
+                      "s3:if-match": "false"
+                    }
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${ConsumerLogGroup}:log-stream:*"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "ConsumerFunction": {
+      "Type": "AWS::Serverless::Function",
+      "Properties": {
+        "CodeUri": ".aws-sam/shadow-consumer.zip",
+        "Handler": "aws_shadow_forecast.lambda_handler",
+        "Runtime": "python3.13",
+        "Architectures": [
+          "x86_64"
+        ],
+        "MemorySize": 128,
+        "Timeout": 240,
+        "Role": {
+          "Fn::GetAtt": [
+            "ConsumerRole",
+            "Arn"
+          ]
+        },
+        "LoggingConfig": {
+          "LogGroup": {
+            "Ref": "ConsumerLogGroup"
+          }
+        },
+        "Environment": {
+          "Variables": {
+            "EVIDENCE_BUCKET": {
+              "Ref": "EvidenceBucket"
+            }
+          }
+        }
+      }
+    },
+    "AsyncConfiguration": {
+      "Type": "AWS::Lambda::EventInvokeConfig",
+      "Properties": {
+        "FunctionName": {
+          "Ref": "ConsumerFunction"
+        },
+        "Qualifier": "$LATEST",
+        "MaximumEventAgeInSeconds": 60,
+        "MaximumRetryAttempts": 0
+      }
+    },
+    "HourlyRule": {
+      "Type": "AWS::Events::Rule",
+      "DependsOn": [
+        "AsyncConfiguration"
+      ],
+      "Properties": {
+        "ScheduleExpression": "cron(2 * * * ? *)",
+        "State": {
+          "Ref": "ScheduleState"
+        },
+        "Targets": [
+          {
+            "Id": "Shadow",
+            "Arn": {
+              "Fn::GetAtt": [
+                "ConsumerFunction",
+                "Arn"
+              ]
+            },
+            "Input": "{}",
+            "RetryPolicy": {
+              "MaximumEventAgeInSeconds": 60,
+              "MaximumRetryAttempts": 0
+            }
+          }
+        ]
+      }
+    },
+    "InvokePermission": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Ref": "ConsumerFunction"
+        },
+        "Principal": "events.amazonaws.com",
+        "SourceArn": {
+          "Fn::GetAtt": [
+            "HourlyRule",
+            "Arn"
+          ]
+        },
+        "SourceAccount": {
+          "Ref": "AWS::AccountId"
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "FunctionName": {
+      "Value": {
+        "Ref": "ConsumerFunction"
+      }
+    },
+    "RuleName": {
+      "Value": {
+        "Ref": "HourlyRule"
+      }
+    }
+  }
+}

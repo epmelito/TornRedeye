@@ -135,6 +135,19 @@ def _select(points, times, at):
             "observation": observation}
 
 
+def _probabilities(initial, trained, positives):
+    """The frozen unsmoothed empirical baseline and state comparator."""
+    eligible = initial["status"] == "eligible"
+    return {
+        "training_count": trained, "training_positive_count": positives,
+        "empirical_probability": positives / trained if eligible and trained else None,
+        "persistence_probability": (float(initial["observation"]["quantity"] > 0)
+                                    if eligible else None),
+        "forecast_status": ("origin_ineligible" if not eligible else
+                            "no_resolved_training_labels" if not trained else "issued"),
+    }
+
+
 def evaluate(history, *, country, item_id, attempts=()):
     """Compare expanding resolved hourly labels with persistence on common origins.
 
@@ -172,14 +185,8 @@ def evaluate(history, *, country, item_id, attempts=()):
                 positives += past["label"]["available"]
                 latest_training_target = past["target_utc"]
             next_maturity += 1
-        eligible = record["origin"]["status"] == "eligible"
-        record.update({"training_count": trained, "training_positive_count": positives,
-                       "latest_training_target_utc": latest_training_target,
-                       "empirical_probability": positives / trained if eligible and trained else None,
-                       "persistence_probability": (float(record["origin"]["observation"]["quantity"] > 0)
-                                                   if eligible else None)})
-        record["forecast_status"] = ("origin_ineligible" if not eligible else
-                                     "no_resolved_training_labels" if not trained else "issued")
+        record.update(_probabilities(record["origin"], trained, positives))
+        record["latest_training_target_utc"] = latest_training_target
         record["scored"] = record["forecast_status"] == "issued" and record["label"]["status"] == "eligible"
         record["brier"] = None
         if record["scored"]:

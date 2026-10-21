@@ -105,6 +105,10 @@ probabilities, exact restock timing or actual in-game availability is establishe
 
 ## Checks
 
+The separate [offline prospective accounting core](shadow-forecast.md) reuses the
+baseline probabilities and observation selection. It does not attest live issuance
+or change this historical evaluation contract.
+
 ```text
 python -B -m unittest discover -s tests -p test_availability_forecast.py
 python -B -m unittest discover -s tests
