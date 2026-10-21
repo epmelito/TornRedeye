@@ -3,31 +3,79 @@
 TornRedeye explores foreign-market stock observations in Torn, an online game.
 It preserves overseas shop evidence to study availability, restock intervals and
 sellout patterns, with probabilistic forecasting as an experimental capability.
-It uses the existing YATA export source; missing or stale reports never imply
-observed zero stock.
+YATA (yata.yt) is the external, third-party API source used to retrieve Torn
+overseas shop stock data through its travel export endpoint. YATA supplies
+observations; TornRedeye independently collects, preserves and analyzes that
+evidence and develops experimental forecasts. Missing or stale reports never
+imply observed zero stock.
 
 ## How it works
 
-A one-minute AWS Scheduler invokes a guarded Lambda collector. Each retrieval
-retains its complete raw export and a versioned all-country/item evidence record in
-private S3 storage. CloudWatch/SNS monitor collection, and GitHub Actions copies
-verified canonical evidence to Azure. A separate publisher serves the public
-operations dashboard.
+TornRedeye collects stock observations into private evidence storage, with
+independent monitoring, backup, reporting and experimental forecasting components.
+The diagram shows implemented software components and their data flows; it does
+not indicate which production schedules are currently enabled. Deployment and
+operation are described in the [deployment guide](docs/deployment.md).
 
-Shared Python normalization reads every returned country and item from retained
-exports. Local tools analyze historical observations; an independent, private
-shadow consumer records prospective availability forecasts and outcomes when
-separately deployed and activated.
+```mermaid
+flowchart TD
+    schedule["EventBridge Scheduler: one-minute attempts"] --> collector["Guarded Lambda collector"]
+    source["YATA travel export API"] --> collector
+    collector <--> control["Private S3: shared polling-control state"]
+    collector --> history["Private S3: raw and canonical all-country stock evidence"]
+    collector --> monitoring["CloudWatch logs, metrics and alarms"]
+    monitoring --> notifications["SNS notifications"]
+    history --> backup["GitHub Actions: daily verified backup"]
+    backup --> azure["Azure Blob Storage"]
+    history --> publisher["Hourly Lambda snapshot publisher"]
+    monitoring --> publisher
+    publisher --> dashboard["CloudFront: public operations dashboard"]
+    history --> shadow["Independent private Hawaii Shark Fin shadow consumer"]
+    shadow --> forecasts["Private S3: immutable forecasts and outcomes"]
+    forecasts --> backup
+    local["Selected local evidence"] --> analysis["Offline normalization, history and baseline analysis"]
+```
+
+Shared Python normalization processes every returned country and item. The
+independent shadow consumer reads retained evidence without making YATA requests; its experimental
+60-minute forecasts remain private and are not available to players. The public
+dashboard reports operations, not forecasts. Backup scope includes raw/canonical
+stock evidence and immutable forecast, acknowledgement, outcome and checkpoint
+records; mutable forecast state and polling control are excluded. Local historical
+analysis is a separate offline capability.
+
+The polling guard prevents overlapping requests, enforces minimum spacing and
+honors `Retry-After` cooldowns; restrictions or uncertain attempts stop collection
+for operator review. Evidence retains original bytes, timestamps and provenance,
+with canonical records linking available raw bytes by key and SHA-256 hash.
+Conditional writes prevent overwrites; conflicts and partial failures remain
+visible. Monitoring distinguishes persisted acquisitions from HTTP success, and
+backups verify uploaded archives and payload hashes by reading them back.
+
+## Technology stack
+
+| Technology | Responsibility |
+| --- | --- |
+| YATA travel export API | Supply third-party observations of Torn overseas shop stock. |
+| Python | Collect and normalize observations, preserve evidence, run offline analysis and private shadow forecasting, and verify backups. |
+| AWS EventBridge Scheduler and Lambda | Schedule guarded collection and run serverless collector, publisher and independent forecast functions. |
+| Amazon S3 | Keep private raw/canonical stock evidence, polling-control state and forecast records/state; separately store dashboard assets and snapshots. |
+| CloudWatch and SNS | Monitor collection through logs, metrics and alarms, and route notifications to configured, confirmed subscriptions. |
+| GitHub Actions | Run verified daily backups with short-lived AWS/Azure access through OpenID Connect (OIDC). |
+| Azure Blob Storage | Keep independent evidence and immutable forecast backups, including archives and integrity records. |
+| Amazon CloudFront | Deliver the public operations dashboard over HTTPS from a private S3 origin. |
+| AWS SAM / CloudFormation | Define cloud resources and permissions as reviewable templates; deployment and schedule activation remain separate actions. |
 
 ## Capabilities and limitations
 
 - **Implemented operational foundation:** guarded collection, immutable evidence
   writes, integrity-checked incremental backups and an operations dashboard.
 - **Implemented shared processing:** deterministic all-country/item normalization,
-  field diagnostics and reusable local history analysis. The clean reset uses a
-  fresh, time-partitioned lineage with bounded prospective reads and independent
-  Azure recovery. These local changes await separately authorized cutover; old
-  evidence remains a sealed archive.
+  field diagnostics and reusable local history analysis. Time-partitioned evidence
+  supports bounded prospective reads and independently verified Azure recovery.
+  Historical evidence retains its original bytes and provenance separately from
+  the operational lineage; operational readers do not rewrite it or use historical
+  labels to train current forecasts.
 - **Experimental forecasting:** offline empirical/persistence comparison and a
   private 60-minute Hawaii Shark Fin shadow consumer. Its AWS definition defaults
   to disabled. Predictions are not validated purchasing or travel advice.
