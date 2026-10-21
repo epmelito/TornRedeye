@@ -13,7 +13,9 @@ import unittest
 from unittest.mock import patch
 
 import evidence_backup as backup
-import stock_history as history
+from tornredeye import stock_history as history
+from tornredeye.evidence_paths import evidence_keys
+from uuid import UUID
 
 
 NOW = datetime(2026, 10, 18, 12, tzinfo=timezone.utc)
@@ -27,9 +29,9 @@ class HistoryTests(unittest.TestCase):
         (self.root / "objects").mkdir()
 
     def add(self, minute, quantity, *, source=None, status="200", modify=None, raw=None,
-            country="haw", item_id=1485, name="Shark Fin"):
+            country="haw", item_id=1485, name="Shark Fin", prefix=backup.PREFIXES[0]):
         retrieval = NOW + timedelta(minutes=minute)
-        key = backup.PREFIXES[0] + f"{len(list((self.root / 'objects').glob('*.json'))):032x}.bin"
+        key = evidence_keys(retrieval, UUID(int=len(list((self.root / "objects").glob("*.json")))))[0]
         item = {"id": item_id, "name": name, "quantity": quantity, "cost": 3000}
         payload = {"timestamp": int(retrieval.timestamp()) - 30, "stocks": {
             country: {"update": int((retrieval - timedelta(minutes=10)).timestamp()) if source is None else source,
@@ -40,8 +42,8 @@ class HistoryTests(unittest.TestCase):
         raw = backup._bytes(payload) if raw is None else raw
         digest = hashlib.sha256(raw).hexdigest()
         metadata = {"source": "YATA", "source-url": "https://yata.yt/api/v1/travel/export/",
-                    "retrieved-at": retrieval.isoformat(), "status": "missing",
-                    "collection-id": key.rsplit("/", 1)[1][:-4], "sha256": digest}
+                    "retrieved-at": retrieval.isoformat(), "acquisition-status": "success",
+                    "collection-id": key.split("/")[-2], "sha256": digest}
         if status is not None:
             metadata["http-status"] = status
         inventory = {"key": key, "size": len(raw), "etag": '"synthetic"',
@@ -61,6 +63,14 @@ class HistoryTests(unittest.TestCase):
 
     def rows(self):
         return history.analyze(self.root, country="haw", item_id=1485)["observations"]
+
+    def test_all_stock_history_preserves_original_provenance(self):
+        _, old = self.add(0, 0)
+        _, new = self.add(1, 8, prefix=backup.PREFIXES[0])
+        report = history.analyze(self.root, country="haw", item_id=1485)
+        self.assertEqual([r["quantity"] for r in report["observations"]], [0, 8])
+        self.assertEqual([r["raw_evidence"]["key"] for r in report["observations"]], [old["key"], new["key"]])
+        self.assertEqual(report["observations"][1]["comparison"]["quantity_change"], 8)
 
     def test_another_country_and_item_are_selected_by_cli_arguments(self):
         def add_other_stocks(payload):
@@ -160,7 +170,7 @@ class HistoryTests(unittest.TestCase):
 
     def test_failed_collection_cannot_be_recovered_from_a_valid_looking_body(self):
         member, receipt = self.add(0, 5)
-        receipt["metadata"]["status"] = "collection_failed"
+        receipt["metadata"]["acquisition-status"] = "collection_failed"
         self.write_receipt(member, receipt)
         row = self.rows()[0]
         self.assertIsNone(row["quantity"])
@@ -273,7 +283,7 @@ class HistoryTests(unittest.TestCase):
         with redirect_stdout(output):
             self.assertEqual(history.main([str(self.root), "--country", "haw", "--item-id", "1485"]), 0)
         self.assertEqual(json.loads(output.getvalue()), first)
-        process = subprocess.run([sys.executable, "-B", "stock_history.py", str(self.root), "--country", "haw", "--item-id", "1485"],
+        process = subprocess.run([sys.executable, "-B", "-m", "tornredeye.stock_history", str(self.root), "--country", "haw", "--item-id", "1485"],
                                  cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True)
         self.assertEqual(process.returncode, 0, process.stderr)
         self.assertEqual(json.loads(process.stdout), first)

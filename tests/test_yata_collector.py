@@ -35,162 +35,16 @@ def encode(payload):
     return json.dumps(payload, indent=2).encode("utf-8")
 
 
-class NormalizeTests(unittest.TestCase):
-    def test_observation_preserves_evidence_and_provenance(self):
-        raw = encode(PAYLOAD) + b"\n"
-        result = collector.normalize(raw, NOW)
-        self.assertEqual(result.status, "observed")
-        self.assertEqual(result.raw_response, raw)
-        self.assertEqual(result.retrieved_at, NOW)
-        self.assertEqual(result.http_status, 200)
-        self.assertEqual(result.source, "YATA")
-        self.assertEqual(result.source_url, collector.SOURCE_URL)
-        self.assertEqual(result.country, "jap")
-        self.assertEqual(result.item_id, 206)
-        self.assertEqual(result.source_path, "stocks.jap.stocks")
-        self.assertEqual(result.export_timestamp, EXPORT_TIMESTAMP)
-        self.assertEqual(result.source_timestamp, SOURCE_TIMESTAMP)
-        self.assertEqual(result.observation, collector.Observation(206, "Xanax", 42, 800000))
-        self.assertIsNone(result.detail)
-
-    def test_zero_quantity_is_observed(self):
-        payload = deepcopy(PAYLOAD)
-        payload["stocks"]["jap"]["stocks"][1]["quantity"] = 0
-        result = collector.normalize(encode(payload), NOW)
-        self.assertEqual(result.status, "observed")
-        self.assertEqual(result.observation.quantity, 0)
-
-    def test_missing_records_do_not_fabricate_zero(self):
-        for case in ("japan", "xanax", "empty"):
-            with self.subTest(case=case):
-                payload = deepcopy(PAYLOAD)
-                if case == "japan":
-                    del payload["stocks"]["jap"]
-                elif case == "xanax":
-                    payload["stocks"]["jap"]["stocks"].pop()
-                else:
-                    payload["stocks"]["jap"] = {"update": 0, "stocks": []}
-                raw = encode(payload)
-                result = collector.normalize(raw, NOW)
-                self.assertEqual(result.status, "missing")
-                self.assertIsNone(result.observation)
-                self.assertEqual(result.raw_response, raw)
-                self.assertEqual(result.export_timestamp, EXPORT_TIMESTAMP)
-                self.assertIn("absent", result.detail)
-                if case == "empty":
-                    self.assertEqual(result.source_timestamp, 0)
-                    self.assertIsNone(result.source_age_seconds)
-
-    def test_wrong_country_is_not_used_as_fallback(self):
-        payload = deepcopy(PAYLOAD)
-        payload["stocks"]["can"] = payload["stocks"].pop("jap")
-        result = collector.normalize(encode(payload), NOW)
-        self.assertEqual(result.status, "missing")
-        self.assertIsNone(result.source_timestamp)
-        self.assertIsNone(result.observation)
-
-    def test_malformed_json_and_structure(self):
-        payloads = [
-            b"not json", b"", b"\xff", b"null", b"[]", b'{"timestamp": NaN}',
-            encode({}), encode({"timestamp": EXPORT_TIMESTAMP, "stocks": []}),
-            encode({"timestamp": EXPORT_TIMESTAMP, "stocks": {"jap": None}}),
-            encode({"timestamp": EXPORT_TIMESTAMP, "stocks": {"jap": {"update": 1}}}),
-        ]
-        for raw in payloads:
-            with self.subTest(raw=raw):
-                result = collector.normalize(raw, NOW)
-                self.assertEqual(result.status, "malformed")
-                self.assertEqual(result.raw_response, raw)
-                self.assertIsNone(result.observation)
-                self.assertTrue(result.detail)
-
-    def test_invalid_timestamps_preserve_other_valid_timestamp(self):
-        for field in ("timestamp", "update"):
-            for value in (None, True, "123", -1, 1.5):
-                with self.subTest(field=field, value=value):
-                    payload = deepcopy(PAYLOAD)
-                    parent = payload if field == "timestamp" else payload["stocks"]["jap"]
-                    parent[field] = value
-                    result = collector.normalize(encode(payload), NOW)
-                    self.assertEqual(result.status, "malformed")
-                    self.assertIsNone(result.observation)
-                    if field == "timestamp":
-                        self.assertIsNone(result.export_timestamp)
-                        self.assertEqual(result.source_timestamp, SOURCE_TIMESTAMP)
-                    else:
-                        self.assertIsNone(result.source_timestamp)
-                        self.assertEqual(result.export_timestamp, EXPORT_TIMESTAMP)
-        for field in ("timestamp", "update"):
-            payload = deepcopy(PAYLOAD)
-            parent = payload if field == "timestamp" else payload["stocks"]["jap"]
-            del parent[field]
-            self.assertEqual(collector.normalize(encode(payload), NOW).status, "malformed")
-
-    def test_invalid_target_fields(self):
-        invalid_values = {
-            "id": (None, True, "206", -1, 206.0),
-            "quantity": (None, False, "0", -1, 0.5),
-            "cost": (None, False, "800000", -1, 0.5),
-            "name": (None, 206, "", "   "),
-        }
-        for field, values in invalid_values.items():
-            for value in values:
-                with self.subTest(field=field, value=value):
-                    payload = deepcopy(PAYLOAD)
-                    payload["stocks"]["jap"]["stocks"][1][field] = value
-                    result = collector.normalize(encode(payload), NOW)
-                    self.assertEqual(result.status, "malformed")
-                    self.assertIsNone(result.observation)
-                    self.assertEqual(result.export_timestamp, EXPORT_TIMESTAMP)
-                    self.assertEqual(result.source_timestamp, SOURCE_TIMESTAMP)
-            payload = deepcopy(PAYLOAD)
-            del payload["stocks"]["jap"]["stocks"][1][field]
-            self.assertEqual(collector.normalize(encode(payload), NOW).status, "malformed")
-
-    def test_invalid_lists_and_item_identity(self):
-        for items in (None, {}, [None], [{}], [{"id": "206"}]):
-            with self.subTest(items=items):
-                payload = deepcopy(PAYLOAD)
-                payload["stocks"]["jap"]["stocks"] = items
-                self.assertEqual(collector.normalize(encode(payload), NOW).status, "malformed")
-
-    def test_duplicate_target_is_ambiguous(self):
-        payload = deepcopy(PAYLOAD)
-        items = payload["stocks"]["jap"]["stocks"]
-        items.append(dict(items[1], quantity=0))
-        result = collector.normalize(encode(payload), NOW)
-        self.assertEqual(result.status, "malformed")
-        self.assertIn("duplicate", result.detail)
-        self.assertIsNone(result.observation)
-
-    def test_cached_and_future_timestamps_remain_visible(self):
-        result = collector.normalize(encode(PAYLOAD), NOW)
-        later = collector.normalize(encode(PAYLOAD), NOW + timedelta(hours=2))
-        self.assertEqual(result.source_age_seconds, 300)
-        self.assertEqual(result.export_age_seconds, 60)
-        self.assertEqual(later.source_age_seconds, 7500)
-        self.assertEqual(later.export_age_seconds, 7260)
-        self.assertEqual(later.observation, result.observation)
-        payload = deepcopy(PAYLOAD)
-        payload["stocks"]["jap"]["update"] = int(NOW.timestamp()) + 10
-        self.assertEqual(collector.normalize(encode(payload), NOW).source_age_seconds, -10)
-
-    def test_retrieval_time_requires_awareness_and_normalizes_to_utc(self):
-        local_time = NOW.astimezone(timezone(timedelta(hours=2)))
-        result = collector.normalize(encode(PAYLOAD), local_time)
-        self.assertEqual(result.retrieved_at, NOW)
-        self.assertIs(result.retrieved_at.tzinfo, timezone.utc)
-        with self.assertRaisesRegex(ValueError, "timezone aware"):
-            collector.normalize(encode(PAYLOAD), NOW.replace(tzinfo=None))
-
-    def test_http_failure_is_not_parsed_as_an_observation(self):
-        raw = encode(PAYLOAD)
-        result = collector.normalize(raw, NOW, 503)
-        self.assertEqual(result.status, "collection_failed")
-        self.assertEqual(result.raw_response, raw)
-        self.assertEqual(result.http_status, 503)
-        self.assertIsNone(result.observation)
-
+class AcquisitionTests(unittest.TestCase):
+    def test_acquisition_is_independent_of_export_and_country_validation(self):
+        for raw in (b"invalid", b"{}", encode(PAYLOAD), b""):
+            result = collector.normalize(raw, NOW)
+            self.assertEqual(result.status, "success")
+            self.assertEqual(result.raw_response, raw)
+            self.assertFalse(hasattr(result, "country"))
+            self.assertFalse(hasattr(result, "observation"))
+        with self.assertRaises(ValueError):
+            collector.normalize(b"{}", NOW.replace(tzinfo=None))
 
 class CollectTests(unittest.TestCase):
     def setUp(self):
@@ -205,7 +59,7 @@ class CollectTests(unittest.TestCase):
 
     def test_success_uses_identified_get_request_timeout_and_closes_response(self):
         result = collector.collect(timeout=5)
-        self.assertEqual(result.status, "observed")
+        self.assertEqual(result.status, "success")
         self.assertEqual(result.retrieved_at, NOW)
         self.urlopen.assert_called_once()
         request = self.urlopen.call_args.args[0]
@@ -278,7 +132,7 @@ class CollectTests(unittest.TestCase):
     def test_malformed_success_retains_body(self):
         self.response.read.return_value = b'{"stocks":'
         result = collector.collect()
-        self.assertEqual(result.status, "malformed")
+        self.assertEqual(result.status, "success")
         self.assertEqual(result.raw_response, b'{"stocks":')
         self.assertEqual(result.http_status, 200)
 
@@ -289,7 +143,6 @@ class CollectTests(unittest.TestCase):
         self.assertEqual(result.status, "collection_failed")
         self.assertEqual(result.http_status, 429)
         self.assertEqual(result.raw_response, b'{"error": "rate limited"}')
-        self.assertIsNone(result.observation)
         self.assertIn("429", result.detail)
         self.assertTrue(body.closed)
 
@@ -318,7 +171,6 @@ class CollectTests(unittest.TestCase):
                 self.assertEqual(result.retrieved_at, NOW)
                 self.assertIsNone(result.raw_response)
                 self.assertIsNone(result.http_status)
-                self.assertIsNone(result.observation)
                 self.assertIn(str(error), result.detail)
 
     def test_interrupted_body_preserves_partial_evidence(self):
@@ -327,7 +179,6 @@ class CollectTests(unittest.TestCase):
         self.assertEqual(result.status, "collection_failed")
         self.assertEqual(result.raw_response, b'{"timestamp":')
         self.assertEqual(result.http_status, 200)
-        self.assertIsNone(result.observation)
         self.assertIn("IncompleteRead", result.detail)
         self.urlopen.return_value.__exit__.assert_called_once()
 
@@ -337,15 +188,11 @@ class CollectTests(unittest.TestCase):
         second = collector.collect()
         self.urlopen.side_effect = URLError("offline")
         failed = collector.collect()
-        self.assertEqual(first.status, "observed")
-        self.assertEqual(second.observation, first.observation)
+        self.assertEqual(first.status, "success")
         self.assertEqual(second.raw_response, first.raw_response)
         self.assertEqual(first.retrieved_at, NOW)
         self.assertEqual(second.retrieved_at, NOW + timedelta(minutes=5))
-        self.assertEqual(second.source_timestamp, first.source_timestamp)
-        self.assertEqual(second.source_age_seconds, first.source_age_seconds + 300)
         self.assertEqual(failed.status, "collection_failed")
-        self.assertIsNone(failed.observation)
 
     def test_invalid_timeout_fails_before_request(self):
         for timeout in (0, -1, True, "15", None, float("inf"), float("nan")):

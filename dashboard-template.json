@@ -303,9 +303,11 @@
                   "Action": [
                     "s3:GetObject"
                   ],
-                  "Resource": {
-                    "Fn::Sub": "arn:${AWS::Partition}:s3:::${EvidenceBucketName}/normalized/yata/jap/206/*"
-                  }
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:s3:::${EvidenceBucketName}/evidence/live-v1/*/attempt.json"
+                    }
+                  ]
                 },
                 {
                   "Effect": "Allow",

@@ -9,7 +9,8 @@ import re
 import sys
 
 import evidence_backup as backup
-from yata_normalizer import normalize_export
+from tornredeye.evidence_paths import is_raw, evidence_identity
+from tornredeye.normalization import normalize_export, normalized_target_fields
 
 
 def _time(value):
@@ -25,33 +26,6 @@ def _utc(value):
     return value.isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
-def normalized_target_fields(normalized, retrieved, country, item_id):
-    """Shared target validation for retained raw exports, without I/O."""
-    row = {"issues": [], "quantity": None, "name": None, "cost": None}
-    row["normalization_status"] = normalized["status"]
-    row["diagnostics"] = normalized["diagnostics"]
-    row["export_timestamp"] = normalized["export_timestamp"]
-    country_record = normalized["countries"].get(country, {})
-    row["source_timestamp"] = country_record.get("source_timestamp")
-    item = next((item for item in country_record.get("items", []) if item["item_id"] == item_id), None)
-    if item is None:
-        row["issues"].append("target_missing_or_invalid")
-    else:
-        row.update({k: item[k] for k in ("quantity", "name", "cost")})
-        if any(item[k] is None for k in ("quantity", "name", "cost")):
-            row["issues"].append("invalid_target_fields")
-    for field in ("source", "export"):
-        stamp = row[field + "_timestamp"]
-        if stamp is None or (field == "source" and stamp == 0):
-            row["issues"].append(field + "_time_unknown")
-        else:
-            age = retrieved.timestamp() - stamp
-            row[field + "_age_seconds"] = age
-            if age < 0:
-                row["issues"].append(field + "_time_in_future")
-    return row
-
-
 def _row(root, member, country, item_id):
     row = {"receipt": member, "retrieved_at": None, "raw_evidence": None,
            "collection_id": None, "http_status": None, "collection_status": None,
@@ -63,10 +37,9 @@ def _row(root, member, country, item_id):
     try:
         receipt = backup._read(root, member)
         key = receipt["key"]
-        if key.startswith(backup.PREFIXES[1]):
+        if not is_raw(key):
             return None
-        if (not key.startswith(backup.PREFIXES[0])
-                or member != f"objects/{backup._key_id(key)}.json"
+        if (member != f"objects/{backup._key_id(key)}.json"
                 or not isinstance(receipt["bucket"], str) or not receipt["bucket"].strip()
                 or receipt["inventory"]["key"] != key
                 or receipt["status"] != "verified"
@@ -81,15 +54,19 @@ def _row(root, member, country, item_id):
         row["retrieval_metadata"] = metadata
         retrieved = _time(metadata.get("retrieved-at"))
         row["retrieved_at"] = _utc(retrieved)
+        partition, identifier, _ = evidence_identity(key)
+        if (retrieved.replace(minute=0, second=0, microsecond=0) != partition
+                or metadata.get("collection-id", "").replace("-", "") != identifier.hex):
+            raise ValueError("raw identity or retrieval partition mismatch")
         row["collection_id"] = metadata.get("collection-id")
-        row["collection_status"] = metadata.get("status")
+        row["collection_status"] = metadata.get("acquisition-status")
         status = metadata.get("http-status")
         if not isinstance(status, str) or not re.fullmatch(r"[1-5][0-9]{2}", status):
             row["issues"].append("missing_or_invalid_http_status")
             return row
         row["http_status"] = int(status)
-        if metadata.get("source") != "YATA" or metadata.get("status") not in (
-            "observed", "missing", "malformed",
+        if metadata.get("source") != "YATA" or metadata.get("acquisition-status") not in (
+            "success",
         ):
             row["issues"].append("failed_or_unknown_collection_context")
             return row
@@ -113,7 +90,7 @@ def _row(root, member, country, item_id):
 def analyze(directory, *, country: str, item_id: int):
     """Analyze only the supplied local subset; never modify or fetch evidence."""
     if not isinstance(country, str) or not country.strip():
-        raise ValueError("country must be a nonempty YATA country key")
+        raise ValueError("country must be a nonempty country key")
     if type(item_id) is not int or item_id < 1:
         raise ValueError("item_id must be a positive integer")
     root = Path(directory).absolute()
@@ -188,7 +165,7 @@ def analyze(directory, *, country: str, item_id: int):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", help="local subset containing objects/<key-hash>.json and .bin")
-    parser.add_argument("--country", required=True, help="YATA country key, e.g. haw")
+    parser.add_argument("--country", required=True, help="country key, e.g. haw")
     parser.add_argument("--item-id", required=True, type=int, help="positive item ID, e.g. 1485")
     args = parser.parse_args(argv)
     if not args.country.strip() or args.item_id < 1:

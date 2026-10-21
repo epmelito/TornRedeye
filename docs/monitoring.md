@@ -17,7 +17,7 @@ keep their existing behavior.
 
 | Signal | Meaning and evaluation |
 | --- | --- |
-| `PersistedObservations` | Count the existing `persisted collection_id=` log only when it also contains `status=observed`. Emitted after `persist` returns, confirming both raw and normalized writes or matching existing evidence. Observed stock zero and repeated cached observations count. HTTP 200, raw-only writes, skipped runs and persisted missing/malformed/failure records do not count. |
+| `PersistedObservations` | Count `persisted collection_id=` only with `acquisition_status=success` and a nonzero `usable_observations` count. Emitted after both evidence writes or matching retries complete. Valid item zeros and cached exports count; raw-only writes, skipped runs, acquisition failures and exports without usable item fields do not. This is an acquisition/validation heartbeat, not proof that every country is fresh or available. |
 | Missing observations alarm | Sum per minute, `FILL(observations, 0)`, below 1 for 15 of 15 minutes. Silence, missing metrics and explicit zeros breach. One observation in the evaluation window clears the alarm. Detects roughly 15 minutes without persisted observations, including failed schedule delivery or stopped logging. |
 | Collection errors alarm | Built-in `AWS/Lambda Errors`, scoped to the collector function, sum >= 1 in at least 3 of 5 one-minute periods. Requires three breaching minutes; three errors confined to one minute do not trigger it. Includes propagated source, configuration, control, persistence and release errors, and runtime timeouts. Missing data is nonbreaching. |
 | `PollingHalts` and halt alarm | Count `collection skipped` logs with `reason=halted:`; sum >= 1 in one minute. Covers access/rate halts and abandoned attempts. Ordinary spacing, cooldown, conflict and in-flight skips do not count. Missing data is nonbreaching. A restriction-setting invocation already raises a Lambda error; subsequent halted skips keep this alarm active. |
@@ -35,7 +35,7 @@ metrics more than once for the same collection. Metric filters do not deduplicat
 by collection UUID. Their sums are matching-event counts, not exact distinct
 collections, distinct halts, new source updates or S3 object counts. For distinct
 persisted collections, use existing normalized evidence grouped by collection
-UUID with `status=observed`, or deduplicated completion logs with explicit
+UUID with `acquisition_status=success` and usable observations, or deduplicated completion logs with explicit
 coverage limits. No new reader or deduplication service is introduced here.
 Persistence followed by a control-release failure can produce both an
 observation heartbeat and an invocation error; both are valid signals.
@@ -251,3 +251,7 @@ increment. Future metric reads and Logs Insights scans can incur charges,
 especially GetMetricData, which is excluded from the general API free allowance.
 Recheck regional rates and account eligibility before deployment; this monitoring
 does not cap spend or measure an exact AWS bill.
+
+Issue #53 changes the persistence heartbeat from the Japan pilot to usable
+all-stock fields. Record the live UTC cutover boundary when interpreting charts
+that span both definitions; the metric is not evidence of all-country freshness.

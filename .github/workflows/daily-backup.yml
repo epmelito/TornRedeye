@@ -70,7 +70,7 @@ jobs:
           BACKUP_AWS_REGION: ${{ vars.BACKUP_AWS_REGION }}
           BACKUP_AZURE_ACCOUNT: ${{ vars.BACKUP_AZURE_ACCOUNT }}
           BACKUP_AZURE_CONTAINER: ${{ vars.BACKUP_AZURE_CONTAINER }}
-          BACKUP_BASELINE_CATALOG_SHA256: ${{ vars.BACKUP_BASELINE_CATALOG_SHA256 }}
+          BACKUP_ANCHOR_SHA256: ${{ vars.BACKUP_ANCHOR_SHA256 }}
         run: python -B tools/daily_backup.py
       - name: Remove private temporary files
         if: always()

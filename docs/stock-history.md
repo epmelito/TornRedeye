@@ -1,6 +1,6 @@
 # Local stock history
 
-`stock_history.py` reads a caller-selected local subset of archived YATA
+`tornredeye.stock_history` reads a caller-selected local subset of retained source
 exports for a selected country and item. Hawaii Shark Fin (`haw`, item ID `1485`)
 is the primary example. It prints a deterministic JSON report
 to standard output. It never changes evidence, contacts a cloud service, or
@@ -8,7 +8,7 @@ downloads history. Use Python 3.11 or newer.
 
 ## Input and command
 
-Use the existing [local backup receipt/payload layout](evidence-backup.md#manifest-and-integrity-contract):
+Use the existing [local backup receipt/payload layout](evidence-backup.md#isolated-restore):
 
 ```text
 selected-subset/
@@ -22,15 +22,17 @@ them, manufacture metadata, or overwrite originals. A full backup manifest is
 not required for this selected subset. Receipts retain the existing canonical
 `{value, sha256}` wrapper and must have `status: verified`. Their identity,
 inventory metadata, payload length and hash are checked with existing backup
-helpers. Normalized Japan receipts are ignored; no new input format is introduced.
-The raw prefix still says `raw/yata/jap/206/`: these existing objects contain the
-complete export, including Hawaii, not just the Japan observation.
+helpers. Normalized and forecast receipts are ignored by this raw-subset analysis.
+The active reader accepts only the fresh time-partitioned evidence contract.
+For sealed historical evidence, use the preserved archive interpretation code;
+these operational tools do not translate old identities. Raw objects contain the
+complete source export; country/item selection is independent of storage naming.
 
 From the repository root in PowerShell:
 
 ```powershell
 . ./.chatgpt/powershell-helpers.ps1
-Invoke-NativeCommand python @('-B', 'stock_history.py', 'C:\private\selected-subset', '--country', 'haw', '--item-id', '1485')
+Invoke-NativeCommand python @('-B', '-m', 'tornredeye.stock_history', 'C:\private\selected-subset', '--country', 'haw', '--item-id', '1485')
 ```
 
 `--country` and `--item-id` are required; use the exact YATA country key and a
@@ -73,7 +75,7 @@ analysis or cloud access is authorized by this command.
 
 The report covers only the supplied subset, not the entire archive or all
 collection attempts. Reuse requires original retrieval metadata, not file mtime,
-S3 LastModified or processing time. The tool reuses `yata_normalizer.py`; it does
+S3 LastModified or processing time. The tool reuses `tornredeye/normalization.py`; it does
 not alter the collector, normalizer, persistence, backup or dashboard contracts.
 
 ## Offline checks

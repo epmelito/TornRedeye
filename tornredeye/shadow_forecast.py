@@ -6,10 +6,11 @@ import hashlib
 import json
 import math
 
-from availability_forecast import (
+from tornredeye.availability_forecast import (
     HORIZON, MAX_SOURCE_AGE, _probabilities, _rows, _select, _target, _timeline,
 )
-from stock_history import _time, _utc
+from tornredeye.stock_history import _time, _utc
+from tornredeye.evidence_paths import is_normalized, counterpart
 
 
 METHODS = {"empirical": "expanding-resolved-availability-v1",
@@ -95,10 +96,9 @@ class OfflineShadowRun:
                 if by_key.get(row["key"]) != row:
                     # newly available raw evidence can supersede an unknown
                     # attempt in a new snapshot, never in an old decision
-                    raw_key = row["key"].replace("normalized/", "raw/", 1)
-                    raw_key = raw_key.removesuffix(".json") + ".bin"
+                    raw_key = counterpart(row["key"]) if is_normalized(row["key"]) else None
                     replacement = by_key.get(raw_key)
-                    if not (row["key"].startswith("normalized/")
+                    if not (is_normalized(row["key"])
                             and row["source"] is None and row["quantity"] is None
                             and row["key"] not in by_key and replacement
                             and replacement["at"] == row["at"]):

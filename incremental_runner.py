@@ -165,7 +165,7 @@ class AzureBlobs:
             raise
 
     def open_blob(self, name):
-        engine.require(name.startswith(('baseline/', 'incremental/batches/')), 'Azure read scope violation')
+        engine.require((name == coverage.ANCHOR_BLOB or name.startswith(coverage.BATCH_PREFIX)), 'Azure read scope violation')
         body, response = self.request('GET', name)
         try:
             size = int(response.getheader('Content-Length'))
@@ -178,13 +178,13 @@ class AzureBlobs:
             raise
 
     def create_block_blob(self, name, stream, size):
-        engine.require(name.startswith('incremental/batches/') and '..' not in name.split('/'),
+        engine.require((name == coverage.ANCHOR_BLOB or name.startswith(coverage.BATCH_PREFIX)) and '..' not in name.split('/'),
                        'Azure write scope violation')
         body, _ = self.request('PUT', name, stream=stream, size=size)
         body.close()
 
     def list_blobs(self, *, prefix, continuation_token, page_size):
-        engine.require(prefix == 'incremental/batches/' and type(page_size) is int and 1 <= page_size <= 5000,
+        engine.require(prefix == coverage.BATCH_PREFIX and type(page_size) is int and 1 <= page_size <= 5000,
                        'invalid Azure listing scope')
         query = {'restype': 'container', 'comp': 'list', 'prefix': prefix, 'maxresults': page_size}
         if continuation_token is not None:
@@ -238,14 +238,14 @@ def main(argv=None, *, client_factory=clients):
     parser.add_argument('--region', required=True)
     parser.add_argument('--azure-account', required=True)
     parser.add_argument('--azure-container', required=True)
-    parser.add_argument('--baseline-catalog-sha256', required=True)
+    parser.add_argument('--anchor-sha256', required=True)
     parser.add_argument('--scratch-parent', type=Path, required=True)
     parser.add_argument('--max-seconds', type=float, default=3600)
     parser.add_argument('--live-access-approved', action='store_true')
     args = parser.parse_args(argv)
     try:
         engine.require(args.live_access_approved, 'live access requires separate authorization and --live-access-approved')
-        coverage._hash(args.baseline_catalog_sha256)
+        coverage._hash(args.anchor_sha256)
         engine.require(re.fullmatch(r'[0-9]{12}', args.owner) and re.fullmatch(r'[a-z0-9-]+', args.region)
                        and re.fullmatch(r'[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]', args.bucket), 'invalid AWS configuration')
         limits = engine.Limits(max_seconds=args.max_seconds)
@@ -254,7 +254,7 @@ def main(argv=None, *, client_factory=clients):
         with evidence._lock(args.scratch_parent):
             s3, azure = client_factory(args, limits)
             result = engine.run_backup(s3=s3, azure=azure, bucket=args.bucket,
-                baseline_catalog_sha256=args.baseline_catalog_sha256,
+                anchor_sha256=args.anchor_sha256,
                 inventories={prefix: s3.inventory(prefix) for prefix in evidence.PREFIXES},
                 limits=limits, scratch_parent=args.scratch_parent)
             result['operations']['s3_list'] = s3.requests

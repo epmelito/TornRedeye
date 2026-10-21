@@ -7,8 +7,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools import package_lambda
 
 
-MODULES = ("aws_shadow_forecast.py", "shadow_forecast.py", "availability_forecast.py",
-           "stock_history.py", "evidence_backup.py", "yata_normalizer.py")
+MODULES = ("aws_shadow_forecast.py", "evidence_backup.py", "tornredeye/__init__.py",
+           "tornredeye/normalization.py", "tornredeye/evidence_paths.py", "tornredeye/stock_history.py",
+           "tornredeye/availability_forecast.py", "tornredeye/shadow_forecast.py")
 ARTIFACT = package_lambda.ROOT / ".aws-sam" / "shadow-consumer.zip"
 
 

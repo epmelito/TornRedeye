@@ -18,9 +18,9 @@ import time
 from uuid import uuid4
 
 
-PREFIXES = ("raw/yata/jap/206/", "normalized/yata/jap/206/")
+from tornredeye.evidence_paths import PREFIXES, is_raw, is_normalized, counterpart, validate_backup_key
 CHUNK = 64 * 1024
-SCHEMA = 1
+SCHEMA = 3
 
 
 class BackupError(Exception):
@@ -109,10 +109,9 @@ def _lock(root):
 def _manifest(root, bucket=None, cutoff=None):
     if _path(root, "manifest.json").exists():
         manifest = _read(root, "manifest.json")
-        if (manifest.get("schema_version") != SCHEMA
-                or manifest.get("prefixes") != list(PREFIXES)
+        if ((manifest.get("schema_version"), manifest.get("prefixes")) != (SCHEMA, list(PREFIXES))
                 or not isinstance(manifest.get("bucket"), str)
-                or len(manifest.get("inventory", [])) != 2):
+                or len(manifest.get("inventory", [])) != len(manifest.get("prefixes", []))):
             raise BackupError("unsupported manifest")
         for state in manifest["inventory"]:
             if (not isinstance(state, dict)
@@ -151,8 +150,9 @@ def _key_id(key):
             key.startswith(prefix) for prefix in PREFIXES):
         raise BackupError("unexpected evidence key")
     try:
+        validate_backup_key(key)
         encoded = key.encode("utf-8")
-    except UnicodeError:
+    except (UnicodeError, ValueError):
         raise BackupError("invalid evidence key") from None
     if len(encoded) > 1024:
         raise BackupError("evidence key exceeds S3 limit")
@@ -177,7 +177,7 @@ def _pages(root, manifest):
                 raise BackupError("inventory token chain inconsistent")
             for item in page["objects"]:
                 _key_id(item["key"])
-                if not item["key"].startswith(PREFIXES[index]) or item["key"] <= last:
+                if not item["key"].startswith(manifest["prefixes"][index]) or item["key"] <= last:
                     raise BackupError("duplicate or unordered inventory key")
                 if type(item["size"]) is not int or item["size"] < 0:
                     raise BackupError("invalid inventory size")
@@ -208,7 +208,7 @@ def inventory(*, s3, bucket, directory, paused_cutoff_utc=None,
         manifest = _manifest(root, bucket, paused_cutoff_utc)
         for _ in _pages(root, manifest):
             pass
-        for index, prefix in enumerate(PREFIXES):
+        for index, prefix in enumerate(manifest["prefixes"]):
             state = manifest["inventory"][index]
             while not state["complete"]:
                 if time.monotonic() >= deadline:
@@ -306,7 +306,7 @@ def _verified(root, item, receipt, extension="bin"):
         return "size_mismatch"
     if digest != receipt.get("sha256"):
         return "hash_mismatch"
-    if item["key"].startswith(PREFIXES[0]) and "sha256" in metadata and metadata["sha256"] != digest:
+    if is_raw(item["key"]) and "sha256" in metadata and metadata["sha256"] != digest:
         return "source_checksum_mismatch"
     return "verified"
 
@@ -314,12 +314,14 @@ def _verified(root, item, receipt, extension="bin"):
 def _relationship(root, manifest, item):
     """Inspect bounded normalized links without changing canonical bytes."""
     key = item["key"]
-    if key.startswith(PREFIXES[0]):
+    if is_raw(key):
         if not key.endswith(".bin"):
             return "unrecognized_pair_name"
-        counterpart = PREFIXES[1] + key[len(PREFIXES[0]):-4] + ".json"
-        return ("normalized_receipt_present" if _path(root, f"objects/{_key_id(counterpart)}.json").exists()
+        paired_key = counterpart(key)
+        return ("normalized_receipt_present" if _path(root, f"objects/{_key_id(paired_key)}.json").exists()
                 else "no_normalized_local_receipt")
+    if not is_normalized(key):
+        return "immutable_forecast_record"
     if item["size"] > 1024 ** 2:
         return "normalized_link_unassessed_size_limit"
     try:
@@ -335,7 +337,7 @@ def _relationship(root, manifest, item):
         return "invalid_raw_link"
     raw_key = link.get("key")
     if (link.get("bucket") != manifest["bucket"] or not isinstance(raw_key, str)
-            or not raw_key.startswith(PREFIXES[0])):
+            or not is_raw(raw_key)):
         return "raw_link_identity_mismatch"
     try:
         identifier = _key_id(raw_key)
@@ -453,7 +455,7 @@ def export(*, s3, directory, max_bytes=1024 ** 3, max_seconds=3600,
                     checksum = digest.hexdigest()
                     if size != item["size"]:
                         raise BackupError("source length mismatch")
-                    if item["key"].startswith(PREFIXES[0]) and metadata.get("sha256", checksum) != checksum:
+                    if is_raw(item["key"]) and metadata.get("sha256", checksum) != checksum:
                         raise BackupError("source SHA-256 mismatch")
                     if response.get("ChecksumSHA256") and response.get("ChecksumType") == "FULL_OBJECT":
                         if response["ChecksumSHA256"] != base64.b64encode(digest.digest()).decode():

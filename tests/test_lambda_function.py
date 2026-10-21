@@ -12,6 +12,7 @@ from uuid import UUID
 import lambda_function as handler
 from s3_persistence import PersistenceError, PersistenceReceipt, persist
 from yata_collector import CollectionResult, collect, normalize
+from tornredeye.evidence_paths import evidence_keys
 
 
 NOW = datetime(2026, 10, 8, 12, 0, tzinfo=timezone.utc)
@@ -19,8 +20,7 @@ RUN_ID = UUID("12345678-1234-4234-8234-123456789abc")
 OTHER_RUN_ID = UUID("12345678-1234-4234-8234-123456789abd")
 BUCKET = "test-evidence"
 RAW = b'{"timestamp":1791460740,"stocks":{"jap":{"update":1791460500,"stocks":[{"id":206,"name":"Xanax","quantity":0,"cost":800000}]}}}'
-RAW_KEY = f"raw/yata/jap/206/{RUN_ID.hex}.bin"
-NORMALIZED_KEY = f"normalized/yata/jap/206/{RUN_ID.hex}.json"
+RAW_KEY, NORMALIZED_KEY = evidence_keys(NOW, RUN_ID)
 
 
 class HandlerTests(unittest.TestCase):
@@ -34,6 +34,7 @@ class HandlerTests(unittest.TestCase):
             "DESTINATION_BUCKET": BUCKET, "AWS_REGION": "eu-north-1",
         }, clear=True))
         self.s3 = Mock()
+        self.s3.list_objects_v2.return_value = {"IsTruncated": False, "Contents": []}
         self.client_factory = self.start_patch(patch(
             "lambda_function._s3_client", return_value=self.s3,
         ))
@@ -43,7 +44,7 @@ class HandlerTests(unittest.TestCase):
         self.result = normalize(RAW, NOW)
         self.collect = self.start_patch(patch("lambda_function.collect", return_value=self.result))
         self.persist = self.start_patch(patch("lambda_function.persist", return_value=PersistenceReceipt(
-            RUN_ID, RAW_KEY, NORMALIZED_KEY, "written", "written",
+            RUN_ID, RAW_KEY, NORMALIZED_KEY, "written", "written", "complete", 1,
         )))
         self.uuid = self.start_patch(patch("lambda_function.uuid4", return_value=RUN_ID))
         self.context = SimpleNamespace(aws_request_id="invocation-1")
@@ -62,37 +63,16 @@ class HandlerTests(unittest.TestCase):
         )
         self.assertIs(self.persist.call_args.args[0], self.result)
         self.assertEqual(summary, {
-            "collection_id": str(RUN_ID), "status": "observed",
+            "collection_id": str(RUN_ID), "status": "success", "validation_status": "complete",
             "raw_key": RAW_KEY, "normalized_key": NORMALIZED_KEY,
         })
         self.assertEqual(json.loads(json.dumps(summary)), summary)
         output = "\n".join(logs.output)
-        self.assertIn("status=observed", output)
+        self.assertIn("acquisition_status=success", output)
         self.assertIn("request_id=invocation-1", output)
         self.assertIn(f"normalized_key={NORMALIZED_KEY}", output)
         self.assertNotIn(RAW.decode(), output)
 
-    def test_observation_metric_requires_completed_persistence_of_an_observed_result(self):
-        cases = [
-            (self.result, False, True),
-            (normalize(b'{"timestamp":1,"stocks":{"jap":{"update":0,"stocks":[]}}}', NOW), False, False),
-            (normalize(b"invalid", NOW), False, False),
-            (CollectionResult("collection_failed", NOW, None, http_status=503), False, False),
-            (self.result, True, False),
-        ]
-        for result, storage_failure, expected in cases:
-            with self.subTest(status=result.status, storage_failure=storage_failure):
-                self.collect.return_value = result
-                self.persist.side_effect = OSError("S3 failed") if storage_failure else None
-                with self.assertLogs("lambda_function", level="INFO") as logs:
-                    if storage_failure or result.status in ("malformed", "collection_failed"):
-                        with self.assertRaises((OSError, handler.CollectionError)):
-                            handler.lambda_handler({}, self.context)
-                    else:
-                        handler.lambda_handler({}, self.context)
-                matches = [line for line in logs.output
-                           if "persisted collection_id=" in line and "status=observed" in line]
-                self.assertEqual(len(matches), int(expected))
 
     def test_halt_logs_are_distinct_from_ordinary_skips_without_collection(self):
         for reason in ("halted: HTTP 403; operator intervention required",
@@ -120,7 +100,7 @@ class HandlerTests(unittest.TestCase):
         self.assertIs(raised.exception, error)
         self.persist.assert_called_once()
         output = "\n".join(logs.output)
-        self.assertIn(f"persisted collection_id={RUN_ID} status=observed", output)
+        self.assertIn(f"persisted collection_id={RUN_ID} acquisition_status=success", output)
         self.assertIn("invocation failed stage=control_release", output)
 
     def test_configuration_is_read_from_environment(self):
@@ -166,15 +146,6 @@ class HandlerTests(unittest.TestCase):
         self.collect.assert_not_called()
         self.persist.assert_not_called()
 
-    def test_missing_record_is_persisted_and_warned_without_fabricating_zero(self):
-        missing = normalize(b'{"timestamp":1,"stocks":{"jap":{"update":0,"stocks":[]}}}', NOW)
-        self.collect.return_value = missing
-        with self.assertLogs("lambda_function", level="WARNING") as logs:
-            summary = handler.lambda_handler({}, self.context)
-        self.assertEqual(summary["status"], "missing")
-        self.assertIs(self.persist.call_args.args[0], missing)
-        self.assertIsNone(missing.observation)
-        self.assertIn("Xanax record absent", "\n".join(logs.output))
 
     def test_failed_and_malformed_results_are_persisted_before_invocation_error(self):
         cases = [
@@ -184,6 +155,7 @@ class HandlerTests(unittest.TestCase):
         for result in cases:
             with self.subTest(status=result.status):
                 self.collect.return_value = result
+                self.persist.return_value = PersistenceReceipt(RUN_ID, RAW_KEY, NORMALIZED_KEY, "written", "written", "malformed", 0)
                 with self.assertLogs("lambda_function", level="ERROR") as logs:
                     with self.assertRaises(handler.CollectionError) as raised:
                         handler.lambda_handler({}, self.context)
@@ -239,7 +211,7 @@ class HandlerTests(unittest.TestCase):
     def test_redelivered_event_makes_a_distinct_retrieval_with_new_id(self):
         self.uuid.side_effect = [RUN_ID, OTHER_RUN_ID]
         self.persist.side_effect = persist
-        event = {"collection_id": str(RUN_ID), "timestamp": self.result.source_timestamp}
+        event = {"collection_id": str(RUN_ID), "timestamp": 1791460500}
         first = handler.lambda_handler(event, self.context)
         second = handler.lambda_handler(event, self.context)
         self.assertNotEqual(first["raw_key"], second["raw_key"])
@@ -270,10 +242,10 @@ class HandlerTests(unittest.TestCase):
         document = json.loads(normalized_put.kwargs["Body"])
         self.assertEqual(document["collection_id"], str(RUN_ID))
         self.assertEqual(document["retrieved_at"], "2026-10-08T12:00:00.000000Z")
-        self.assertEqual(document["observation"]["quantity"], 0)
-        self.assertEqual(document["source_timestamp"], self.result.source_timestamp)
+        self.assertEqual(document["countries"]["jap"]["items"][0]["quantity"], 0)
+        self.assertEqual(document["countries"]["jap"]["source_timestamp"], 1791460500)
         self.assertEqual(document["source_url"], self.result.source_url)
-        self.assertEqual(document["status"], "observed")
+        self.assertEqual(document["acquisition"]["status"], "success")
 
     def test_real_http_and_network_failures_are_stored_before_handler_raises(self):
         self.collect.side_effect = collect
@@ -295,8 +267,8 @@ class HandlerTests(unittest.TestCase):
                 urlopen.assert_called_once()
                 puts = self.s3.put_object.call_args_list
                 document = json.loads(puts[-1].kwargs["Body"])
-                self.assertEqual(document["status"], "collection_failed")
-                self.assertIsNone(document["observation"])
+                self.assertEqual(document["acquisition"]["status"], "collection_failed")
+                self.assertEqual(document["countries"], {})
                 self.assertEqual(document["retrieved_at"], "2026-10-08T12:00:00.000000Z")
                 if isinstance(error, HTTPError):
                     self.assertEqual(len(puts), 2)

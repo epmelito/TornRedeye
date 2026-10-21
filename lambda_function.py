@@ -67,9 +67,9 @@ def lambda_handler(event, context):
         result = collect(timeout=timeout)
         logger.info(
             "collection_id=%s request_id=%s status=%s retrieved_at=%s "
-            "source_timestamp=%s export_timestamp=%s http_status=%s detail=%s",
+            "http_status=%s detail=%s",
             collection_id, request_id, result.status, result.retrieved_at.isoformat(),
-            result.source_timestamp, result.export_timestamp, result.http_status, result.detail,
+            result.http_status, result.detail,
         )
         stage = "control_policy"
         control_error = None
@@ -81,27 +81,26 @@ def lambda_handler(event, context):
         stage = "persistence"
         receipt = persist(result, s3=s3, bucket=bucket, collection_id=collection_id)
         logger.info(
-            "persisted collection_id=%s status=%s raw_key=%s normalized_key=%s "
-            "raw_state=%s normalized_state=%s",
+            "persisted collection_id=%s acquisition_status=%s raw_key=%s normalized_key=%s "
+            "raw_state=%s normalized_state=%s validation_status=%s usable_observations=%s",
             collection_id, result.status, receipt.raw_key, receipt.normalized_key,
-            receipt.raw_state, receipt.normalized_state,
+            receipt.raw_state, receipt.normalized_state, receipt.validation_status, receipt.usable_observations,
         )
         if control_error is not None:
             stage = "control_policy"
             raise control_error
         stage = "control_release"
         guard.finish()
-        if result.status in ("collection_failed", "malformed"):
+        if result.status == "collection_failed" or receipt.validation_status == "malformed":
             stage = "collection_outcome"
             raise CollectionError(
                 f"collection_id={collection_id} status={result.status} "
                 f"normalized_key={receipt.normalized_key}: {result.detail}"
             )
-        if result.status == "missing":
-            logger.warning("missing collection_id=%s: %s", collection_id, result.detail)
         return {
             "collection_id": str(collection_id),
             "status": result.status,
+            "validation_status": receipt.validation_status,
             "raw_key": receipt.raw_key,
             "normalized_key": receipt.normalized_key,
         }

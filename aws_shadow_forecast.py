@@ -8,16 +8,18 @@ import logging
 import os
 import re
 
-from availability_forecast import HORIZON, MAX_SOURCE_AGE, _probabilities, _select, _timeline
-from evidence_backup import PREFIXES
-from shadow_forecast import _bytes, _hash, forecast_identity, outcome_label, paired_brier
-from stock_history import _time, _utc, normalized_target_fields
-from yata_normalizer import normalize_export
+from tornredeye.availability_forecast import HORIZON, MAX_SOURCE_AGE, _probabilities, _select, _timeline
+from tornredeye.evidence_paths import (LINEAGE, FORECAST_PREFIX, STATE_PREFIX, counterpart,
+                                      evidence_identity, evidence_keys, window_prefixes)
+from tornredeye.shadow_forecast import _bytes, _hash, forecast_identity, outcome_label, paired_brier
+from tornredeye.stock_history import _time, _utc
+from tornredeye.normalization import normalize_export, normalized_target_fields
 
 
-ROOT = "shadow/haw/1485/v1/"
-POINTER = ROOT + "head.json"
-LEASE = ROOT + "lease.json"
+DEFAULT_EPOCH = "epoch-1"
+ROOT = FORECAST_PREFIX + DEFAULT_EPOCH + "/"
+POINTER = STATE_PREFIX + DEFAULT_EPOCH + "/head.json"
+LEASE = STATE_PREFIX + DEFAULT_EPOCH + "/lease.json"
 WINDOW = timedelta(minutes=10)
 SECOND = timedelta(seconds=1)
 logger = logging.getLogger(__name__)
@@ -36,9 +38,15 @@ class Consumer:
     A missing reserved forecast is an explicit failed slot, never a training row.
     """
 
-    def __init__(self, s3, bucket, *, clock=None, remaining_millis=None):
+    def __init__(self, s3, bucket, *, clock=None, remaining_millis=None, epoch=DEFAULT_EPOCH):
         if not bucket:
             raise ValueError("evidence bucket is required")
+        if not isinstance(epoch, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", epoch):
+            raise ValueError("invalid forecast epoch")
+        self.epoch = epoch
+        self.root = FORECAST_PREFIX + epoch + "/"
+        self.pointer = STATE_PREFIX + epoch + "/head.json"
+        self.lease = STATE_PREFIX + epoch + "/lease.json"
         self.s3, self.bucket = s3, bucket
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.remaining_millis = remaining_millis
@@ -61,6 +69,14 @@ class Consumer:
 
     def get(self, key, *, etag=None, optional=False):
         self.now()
+        if optional:
+            page = self.s3.list_objects_v2(Bucket=self.bucket, Prefix=key, MaxKeys=1)
+            members = page.get("Contents", [])
+            if (type(page.get("IsTruncated")) is not bool or len(members) > 1
+                    or any(not m["Key"].startswith(key) for m in members)):
+                raise ValueError("invalid exact-key inventory")
+            if not members or members[0]["Key"] != key:
+                return None
         try:
             response = self.s3.get_object(Bucket=self.bucket, Key=key,
                                           **({"IfMatch": etag} if etag else {}))
@@ -85,7 +101,7 @@ class Consumer:
                    "last_modified_utc": _utc(modified.astimezone(timezone.utc)),
                    "persisted_before_utc": _utc(modified.astimezone(timezone.utc) + SECOND),
                    "read_request_id": metadata["RequestId"]}
-        if key.startswith(ROOT) and response.get("Metadata", {}).get("sha256") != receipt["sha256"]:
+        if key.startswith((self.root, STATE_PREFIX + self.epoch + "/")) and response.get("Metadata", {}).get("sha256") != receipt["sha256"]:
             raise ValueError("derived object digest mismatch")
         return body, response, receipt
 
@@ -104,7 +120,7 @@ class Consumer:
         return saved[2]
 
     def acquire(self, started):
-        existing = self.get(LEASE, optional=True)
+        existing = self.get(self.lease, optional=True)
         if existing:
             lease = json.loads(existing[0])
             if _time(lease["acquired_at_utc"]) > started:
@@ -114,7 +130,7 @@ class Consumer:
         body = _bytes({"acquired_at_utc": _utc(started),
                        "expires_at_utc": _utc(started + timedelta(minutes=5))})
         try:
-            self.s3.put_object(Bucket=self.bucket, Key=LEASE, Body=body,
+            self.s3.put_object(Bucket=self.bucket, Key=self.lease, Body=body,
                                ContentType="application/json",
                                Metadata={"sha256": hashlib.sha256(body).hexdigest()},
                                **({"IfMatch": existing[1]["ETag"]} if existing else {"IfNoneMatch": "*"}))
@@ -125,84 +141,125 @@ class Consumer:
         return True
 
     def evidence(self, cutoff):
-        """Stream complete inventories, retain only a bounded recent input window.
+        """Completely list the retrieval-hour partitions needed by the fixed window.
 
-        UUID keys cannot support chronological range scans. Canonical writes are
-        already immutable; LIST and conditional GET establish the original S3
-        persistence boundary, independently of when this consumer processes it.
+        Retrieval partitions bound discovery, never establish availability. Only
+        original, conservatively bounded S3 write times admit an input. A failed
+        page or resource limit aborts the decision rather than accepting a subset.
         """
-        rows, provenance, boundary = {}, [], []
-        for prefix in PREFIXES:
-            token = None
+        start = cutoff - WINDOW
+        prefixes = list(window_prefixes(start, cutoff))
+        rows, provenance, boundary, links = {}, [], [], {}
+        listed = 0
+        for prefix in prefixes:
+            token, tokens, last = None, set(), ""
             while True:
                 self.now()
                 page = self.s3.list_objects_v2(
                     Bucket=self.bucket, Prefix=prefix, MaxKeys=1000,
                     **({"ContinuationToken": token} if token else {}))
-                for member in page.get("Contents", []):
-                    modified = member["LastModified"]
-                    if modified < cutoff - WINDOW or modified > cutoff:
-                        continue
-                    key = member["Key"]
-                    suffix = key[len(prefix):]
-                    if not re.fullmatch(r"[0-9a-f]{32}\.(bin|json)", suffix):
-                        raise ValueError("unexpected canonical evidence key")
+                members = page.get("Contents", [])
+                if type(page.get("IsTruncated")) is not bool or not isinstance(members, list) or len(members) > 1000:
+                    raise ValueError("incomplete evidence inventory")
+                for member in members:
+                    listed += 1
+                    if listed > 2000:
+                        raise ValueError("evidence partitions exceed collector contract")
+                    key, modified = member["Key"], member["LastModified"]
+                    partition, identifier, kind = evidence_identity(key)
+                    if not key.startswith(prefix) or key <= last:
+                        raise ValueError("unordered or out-of-scope evidence inventory")
+                    last = key
+                    if not isinstance(modified, datetime) or modified.utcoffset() is None:
+                        raise ValueError("missing evidence availability time")
                     if modified + SECOND > cutoff:
                         boundary.append(key)
                         continue
                     body, response, receipt = self.get(key, etag=member["ETag"])
                     if receipt["last_modified_utc"] != _utc(modified):
                         raise ValueError("canonical evidence changed during inventory")
-                    provenance.append({**receipt, "metadata": response.get("Metadata", {})})
-                    if len(provenance) > 2000:
-                        raise ValueError("evidence window exceeds collector contract")
-                    if prefix == PREFIXES[0]:
+                    if kind == "raw.bin":
                         metadata = response.get("Metadata", {})
                         retrieved = _time(metadata.get("retrieved-at"))
-                        if (metadata.get("source") != "YATA"
+                        status, http = metadata.get("acquisition-status"), metadata.get("http-status")
+                        if (metadata.get("source") != "YATA" or not metadata.get("source-url")
+                                or metadata.get("lineage") != LINEAGE
+                                or metadata.get("collection-id", "").replace("-", "") != identifier.hex
                                 or metadata.get("sha256") != receipt["sha256"]
-                                or metadata.get("status") not in ("observed", "missing", "malformed", "collection_failed")
-                                or not re.fullmatch(r"[1-5][0-9]{2}", metadata.get("http-status", ""))):
-                            raise ValueError("invalid canonical raw context")
-                        normalized = json.loads(normalize_export(
-                            body, retrieved, raw_evidence_id=f"s3://{self.bucket}/{key}",
-                            http_status=int(metadata["http-status"])))
-                        fields = normalized_target_fields(normalized, retrieved, "haw", 1485)
-                        row = {"at": retrieved, "key": key,
-                               "source": fields["source_timestamp"],
-                               "quantity": fields["quantity"], "issues": fields["issues"]}
-                        rows[suffix[:-4]] = row
+                                or status not in ("success", "collection_failed")
+                                or (http is not None and not re.fullmatch(r"[1-5][0-9]{2}", http))
+                                or status == "success" and (http is None or not 200 <= int(http) < 300)):
+                            raise ValueError("invalid canonical raw acquisition context")
+                        if status == "success":
+                            normalized = json.loads(normalize_export(
+                                body, retrieved, raw_evidence_id=f"s3://{self.bucket}/{key}", http_status=int(http)))
+                            fields = normalized_target_fields(normalized, retrieved, "haw", 1485)
+                            row = {"at": retrieved, "key": key, "source": fields["source_timestamp"],
+                                   "quantity": fields["quantity"], "issues": fields["issues"]}
+                        else:
+                            row = {"at": retrieved, "key": key, "source": None,
+                                   "quantity": None, "issues": ["collection_failed"]}
                     else:
                         document = json.loads(body)
                         retrieved = _time(document["retrieved_at"])
-                        if document["collection_id"].replace("-", "") != suffix[:-5]:
-                            raise ValueError("normalized identity mismatch")
-                        if suffix[:-5] in rows and rows[suffix[:-5]]["at"] != retrieved:
-                            raise ValueError("raw/normalized retrieval mismatch")
-                        rows.setdefault(suffix[:-5], {
-                            "at": retrieved, "key": key, "source": None, "quantity": None,
-                            "issues": ["collection_failed" if document["status"] == "collection_failed"
-                                       else "unavailable_target_evidence"]})
+                        if (document.get("format") != "stock-evidence" or document.get("schema_version") != 1
+                                or document.get("lineage") != LINEAGE
+                                or document["collection_id"].replace("-", "") != identifier.hex
+                                or document["acquisition"]["status"] not in ("success", "collection_failed")):
+                            raise ValueError("normalized identity or contract mismatch")
+                        raw_key = counterpart(key)
+                        link = document["raw_evidence"]
+                        if link is not None:
+                            if link.get("key") != raw_key or link.get("bucket") != self.bucket:
+                                raise ValueError("normalized raw identity mismatch")
+                            links[raw_key] = (retrieved, link)
+                        row = {"at": retrieved, "key": key, "source": None, "quantity": None,
+                               "issues": ["collection_failed" if document["acquisition"]["status"] == "collection_failed"
+                                          else "unavailable_target_evidence"]}
+                    if evidence_keys(retrieved, identifier)[0] != key.rsplit("/", 1)[0] + "/raw.bin":
+                        raise ValueError("retrieval partition mismatch")
                     if retrieved > modified + SECOND or retrieved > cutoff:
                         raise ValueError("retrieval is after evidence persistence/cutoff")
-                if not page.get("IsTruncated"):
+                    if retrieved < start:
+                        continue
+                    provenance.append({**receipt, "metadata": response.get("Metadata", {})})
+                    raw_key = key if kind == "raw.bin" else counterpart(key)
+                    if kind == "raw.bin":
+                        if raw_key in rows and rows[raw_key]["at"] != retrieved:
+                            raise ValueError("raw/normalized retrieval mismatch")
+                        rows[raw_key] = row
+                    else:
+                        if raw_key in rows and rows[raw_key]["at"] != retrieved:
+                            raise ValueError("raw/normalized retrieval mismatch")
+                        rows.setdefault(raw_key, row)
+                if not page["IsTruncated"]:
                     break
-                next_token = page["NextContinuationToken"]
-                if next_token == token:
-                    raise ValueError("inventory did not advance")
-                token = next_token
+                following = page.get("NextContinuationToken")
+                if not isinstance(following, str) or not following or following in tokens or not members:
+                    raise ValueError("incomplete evidence pagination")
+                tokens.add(following)
+                token = following
+        receipts = {p["key"]: p for p in provenance}
+        for key, (retrieved, link) in links.items():
+            if key in receipts and (receipts[key]["sha256"] != link.get("sha256")
+                                    or receipts[key]["size_bytes"] != link.get("size_bytes")):
+                raise ValueError("raw/normalized integrity mismatch")
         ordered = sorted(rows.values(), key=lambda r: r["at"])
         if len({r["at"] for r in ordered}) != len(ordered):
             raise ValueError("simultaneous retrievals have no established order")
         points, _, _ = _timeline(ordered)
         return {"cutoff_utc": _utc(cutoff), "window_seconds": int(WINDOW.total_seconds()),
+                "coverage": {"retrieval_start_utc": _utc(start), "prefixes": prefixes,
+                             "inventory_complete": True, "listed_objects": listed,
+                             "collection_between_observations": "unknown"},
                 "rows": [{**r, "at": _utc(r["at"])} for r in ordered],
                 "objects": sorted(provenance, key=lambda r: r["key"]),
                 "persistence_boundary_exclusions": sorted(boundary)}, points
 
     def attest(self, forecast, receipt):
         verified = _time(receipt["persisted_before_utc"]) < _time(forecast["target_utc"])
-        value = {"forecast_id": forecast["forecast_id"], "forecast": receipt,
+        value = {"forecast_id": forecast["forecast_id"], "evidence_lineage": LINEAGE,
+                 "forecast_epoch": self.epoch, "forecast": receipt,
                  "live_issuance_verified": verified,
                  "status": "verified" if verified else "late_or_ambiguous_write"}
         # read-request IDs vary on restart; preserve the first successful receipt
@@ -218,9 +275,8 @@ class Consumer:
             self.create(key, value)
         return value
 
-    @staticmethod
-    def slot_key(slot, kind):
-        return ROOT + slot[:13].replace(":", "") + "/" + kind + ".json"
+    def slot_key(self, slot, kind):
+        return self.root + slot[:13].replace(":", "") + "/" + kind + ".json"
 
     def run(self):
         started = self.now()
@@ -229,9 +285,11 @@ class Consumer:
             logger.info("shadow skipped reason=lease_busy")
             return {"status": "skipped", "reason": "lease_busy"}
         slot = forecast_identity("haw", 1485, started)["utc_hour_slot"]
-        head = self.get(POINTER, optional=True)
+        head = self.get(self.pointer, optional=True)
         if head:
             reference = json.loads(head[0])
+            if not reference["key"].startswith(self.root):
+                raise ValueError("checkpoint is outside this forecast epoch")
             saved = self.get(reference["key"])
             if saved[2]["sha256"] != reference["sha256"]:
                 raise ValueError("checkpoint digest mismatch")
@@ -284,6 +342,7 @@ class Consumer:
                                               forecast["issued_at_utc"])
                         outcome = {"schema_version": 1, "record_kind": "shadow_outcome",
                                    "forecast_id": forecast["forecast_id"],
+                                   "evidence_lineage": LINEAGE, "forecast_epoch": self.epoch,
                                    "forecast_sha256": saved[2]["sha256"],
                                    "target_utc": forecast["target_utc"],
                                    "resolved_at_utc": _utc(self.now()), "label": label,
@@ -316,12 +375,13 @@ class Consumer:
                             checkpoint["brier_sum"][method] += score
                 if state["slot"]:
                     checkpoint["unrecorded_slots"] += int((_time(slot) - _time(state["slot"])) / HORIZON) - 1
-                checkpoint.update(slot=slot, pending=pending + [slot], previous=reference,
+                checkpoint.update(evidence_lineage=LINEAGE, forecast_epoch=self.epoch,
+                                  slot=slot, pending=pending + [slot], previous=reference,
                                   resolutions=resolutions, committed_at_utc=_utc(self.now()))
                 self.create(checkpoint_key, checkpoint)
             reference = {"key": checkpoint_key, "sha256": _hash(checkpoint)}
             body = _bytes(reference)
-            self.s3.put_object(Bucket=self.bucket, Key=POINTER, Body=body,
+            self.s3.put_object(Bucket=self.bucket, Key=self.pointer, Body=body,
                                ContentType="application/json",
                                Metadata={"sha256": hashlib.sha256(body).hexdigest()},
                                **({"IfMatch": head[1]["ETag"]} if head else {"IfNoneMatch": "*"}))
@@ -335,7 +395,8 @@ class Consumer:
             if forecast_identity("haw", 1485, issued)["utc_hour_slot"] != slot:
                 raise RuntimeError("scan crossed UTC slot; reservation remains a failed slot")
             origin = _select(points, [p["at"] for p in points], issued)
-            identity = forecast_identity("haw", 1485, issued)
+            identity = {**forecast_identity("haw", 1485, issued),
+                        "evidence_lineage": LINEAGE, "forecast_epoch": self.epoch}
             forecast = {"schema_version": 1, "record_kind": "shadow_forecast",
                         "forecast_id": _hash(identity), **identity,
                         "issued_at_utc": _utc(issued), "target_utc": _utc(issued + HORIZON),
@@ -362,4 +423,5 @@ def lambda_handler(event, context):
 
     bucket = os.environ.get("EVIDENCE_BUCKET", "").strip()
     return Consumer(boto3.client("s3", region_name="eu-north-1"), bucket,
-                    remaining_millis=getattr(context, "get_remaining_time_in_millis", None)).run()
+                    remaining_millis=getattr(context, "get_remaining_time_in_millis", None),
+                    epoch=os.environ.get("FORECAST_EPOCH", DEFAULT_EPOCH)).run()

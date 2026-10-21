@@ -9,8 +9,10 @@ from pathlib import Path
 import tempfile
 import unittest
 
-import availability_forecast as forecast
+from tornredeye import availability_forecast as forecast
 from evidence_backup import PREFIXES
+from tornredeye.evidence_paths import evidence_keys
+from uuid import UUID
 
 
 START = datetime(2026, 10, 10, tzinfo=timezone.utc)
@@ -26,7 +28,7 @@ def history(values, *, country="haw", item_id=1485):
             source = value[2]
         rows.append({"retrieved_at": at.isoformat(), "source_timestamp": source,
                      "quantity": quantity, "issues": [],
-                     "raw_evidence": {"key": PREFIXES[0] + f"{index:032x}.bin"}})
+                     "raw_evidence": {"key": evidence_keys(at, UUID(int=index))[0]}})
     return {"country": country, "item_id": item_id, "observations": rows}
 
 
@@ -157,7 +159,7 @@ class AvailabilityTests(unittest.TestCase):
 
     def test_normalized_attempt_index_extends_known_cutoff_without_inventing_target(self):
         data = history([(0, 0), (59, 9)])
-        attempts = [{"key": PREFIXES[1] + "f"*32 + ".json",
+        attempts = [{"key": evidence_keys(START+timedelta(minutes=60), UUID(hex="f"*32))[1],
                      "retrieved_at": (START + timedelta(hours=1)).isoformat(),
                      "document_status": "collection_failed"}]
         report = evaluate(data, attempts=attempts)
@@ -165,12 +167,13 @@ class AvailabilityTests(unittest.TestCase):
         self.assertEqual(report["forecasts"][0]["label"]["available"], 1)
         self.assertTrue(report["forecasts"][0]["label"]["observation"]["carried_over_unavailable_attempt"])
         attempts[0]["retrieved_at"] = (START + timedelta(minutes=120)).isoformat()
+        attempts[0]["key"] = evidence_keys(START+timedelta(minutes=120), UUID(hex="f"*32))[1]
         self.assertEqual(evaluate(data, attempts=attempts)["forecasts"][0]["label"]["available"], 1)
         self.assertEqual(evaluate(data, attempts=attempts)["forecasts"][1]["label"]["status"], "stale")
 
     def test_matching_attempt_is_deduplicated_and_mismatch_rejected(self):
         data = history([(0, 0), (60, 3)])
-        attempt = {"key": PREFIXES[1] + "0"*32 + ".json", "retrieved_at": START.isoformat()}
+        attempt = {"key": evidence_keys(START, UUID(int=0))[1], "retrieved_at": START.isoformat()}
         self.assertEqual(evaluate(data, attempts=[attempt])["input_inventory"]["additional_unknown_attempts"], 0)
         with self.assertRaises(ValueError):
             evaluate(data, attempts=[attempt, attempt])

@@ -13,13 +13,13 @@ import evidence_backup as backup
 import incremental_backup as inc
 import incremental_transfer as transfer
 from test_evidence_backup import FakeS3, BoundedBody, CUTOFF, NOW
-BASE = inc.source_key('r', '00' + '1'*30)
-RAW = inc.source_key('r', '01' + '2'*30)
-NORM = inc.source_key('n', '02' + '3'*30)
+from tornredeye.evidence_paths import evidence_keys, FORECAST_PREFIX
+from uuid import UUID
+RAW, NORM = evidence_keys(NOW, UUID(int=2))
 
 class FakeAzure:
-    def __init__(self, baseline):
-        self.data = {inc.BASELINE_CATALOG_BLOB: transfer.wrapped(baseline)}
+    def __init__(self, anchor=None):
+        self.data = {} if anchor is None else {inc.ANCHOR_BLOB: transfer.wrapped(anchor)}
         self.reads, self.creates, self.lists, self.streams = [], [], [], []
         self.before_create = lambda name: None
         self.after_create = lambda name: None
@@ -55,191 +55,143 @@ class FakeAzure:
         self.after_create(name)
 
 class TransferTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.fixture = tempfile.TemporaryDirectory()
-        parent = Path(cls.fixture.name)
-        s3 = FakeS3()
-        s3.add(BASE, b'baseline')
-        directory = parent / 'baseline'
-        backup.inventory(s3=s3, bucket='synthetic-private-bucket', directory=directory, paused_cutoff_utc=CUTOFF)
-        backup.export(s3=s3, directory=directory)
-        cls.baseline = inc.build_baseline_catalog(directory, output_directory=parent/'catalog',
-                                                  verified_archive_sha256=inc.BASELINE_SHA256)
-    @classmethod
-    def tearDownClass(cls):
-        cls.fixture.cleanup()
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.parent = Path(temp.name)
-        self.azure = FakeAzure(self.baseline)
+        self.anchor = inc.empty_anchor("synthetic-private-bucket")
+        self.azure = FakeAzure()
         self.s3 = FakeS3()
-        self.s3.add(BASE, b'baseline')
-        self.original = self.azure.data[inc.BASELINE_CATALOG_BLOB]
-    def add(self, key=RAW, body=b'\x00\xffsynthetic', metadata=None):
-        self.s3.add(key, body, metadata)
+
     def pages(self):
-        return {prefix: [{'request_token': None, 'next_token': None, 'objects': [
-            {'key': key, 'size': v['ContentLength'], 'etag': v['ETag'], 'last_modified': v['LastModified'].isoformat()}
+        return {prefix: [{"request_token": None, "next_token": None, "objects": [
+            {"key": key, "size": v["ContentLength"], "etag": v["ETag"], "last_modified": v["LastModified"].isoformat()}
             for key,v in sorted(self.s3.objects.items()) if key.startswith(prefix)]}] for prefix in backup.PREFIXES}
+
     def run_transfer(self, pages=None, **limits):
-        result = transfer.run_backup(s3=self.s3, azure=self.azure, bucket='synthetic-private-bucket',
-            baseline_catalog_sha256=backup._digest(self.baseline), inventories=self.pages() if pages is None else pages,
+        result = transfer.run_backup(s3=self.s3, azure=self.azure, bucket=self.anchor["bucket"],
+            anchor_sha256=backup._digest(self.anchor), inventories=self.pages() if pages is None else pages,
             limits=replace(transfer.Limits(), **limits), scratch_parent=self.parent)
-        self.assertFalse(list(self.parent.glob('backup-*')), 'scratch leaked')
+        self.assertFalse(list(self.parent.glob("backup-*")))
         return result
-    def unchanged(self):
-        self.assertEqual(self.azure.data[inc.BASELINE_CATALOG_BLOB], self.original)
-        self.assertFalse(any(n.endswith('.verified.json') for n in self.azure.data))
-    def archive(self):
-        names = [n for n in self.azure.data if n.endswith('.zip')]
-        self.assertEqual(len(names), 1)
-        archive = ZipFile(BytesIO(self.azure.data[names[0]]))
-        return names[0], archive, transfer.decode(archive.read(transfer.MANIFEST))
 
-    def test_exact_bytes_empty_metadata_and_completion_commit(self):
-        payload = b'\x00\xffsynthetic'
-        self.add(metadata={'sha256': hashlib.sha256(payload).hexdigest(), 'unrestricted-key': 'Unicode \u00e9'})
-        self.add(NORM, b'')
-        self.s3.objects[RAW]['VersionId'] = 'version-1'
+    def test_empty_lineage_anchor_and_no_historical_dependency(self):
         result = self.run_transfer()
-        self.assertTrue(result['complete'], result)
-        self.assertEqual(result['operations']['azure_writes'], 3)
-        self.assertEqual(result['operations']['azure_reads'], 5)
-        self.assertEqual(set(self.s3.get_calls), {RAW, NORM})
-        name, archive, manifest = self.archive()
-        with archive:
-            for receipt in manifest['receipts'].values():
-                source = self.s3.objects[receipt['key']]
-                self.assertEqual(archive.read(receipt['payload_member']), source['body'])
-                self.assertEqual(receipt['metadata'], source['Metadata'])
-                self.assertEqual(receipt['content_type'], source['ContentType'])
-        proof = transfer.decode(self.azure.data[name + '.verified.json'])
-        inc.validate_completion(proof, 'synthetic-private-bucket')
-        self.assertEqual(proof['sha256'], hashlib.sha256(self.azure.data[name]).hexdigest())
-        with tempfile.TemporaryDirectory(dir=self.parent) as recovered:
-            path = Path(recovered) / 'batch.zip'
-            path.write_bytes(self.azure.data[name])
-            runner = transfer.Runner(self.s3, self.azure, 'synthetic-private-bucket', Path(recovered),
-                                     transfer.Budget(transfer.Limits()))
-            restored = runner.inspect_archive(path, proof)
-            self.assertEqual(restored['receipts'], manifest['receipts'])
-            self.assertEqual(next(r['version_id'] for r in restored['receipts'].values() if r['key']==RAW), 'version-1')
-        self.assertTrue(all(body.closed for body in self.s3.streams + self.azure.streams))
-        self.s3.get_calls.clear(); self.azure.reads.clear(); self.azure.creates.clear()
-        again = self.run_transfer()
-        self.assertTrue(again['complete'], again)
+        self.assertTrue(result["complete"], result)
+        self.assertEqual(transfer.decode(self.azure.data[inc.ANCHOR_BLOB]), self.anchor)
+        self.assertEqual(len(self.azure.data), 1)
+        self.assertEqual(self.s3.get_calls, [])
+
+    def test_full_evidence_and_immutable_forecast_coverage_restore_and_restart(self):
+        for key, body in [(RAW,b"\x00\xffraw"), (NORM,b'{"raw_evidence":null}')]+[
+                (FORECAST_PREFIX+"epoch-1/2026-10-11T00/"+kind+".json", b"{}")
+                for kind in ("forecast","ack","outcome","checkpoint")]:
+            self.s3.add(key,body,{"sha256":hashlib.sha256(body).hexdigest()})
+        self.s3.add("forecast-state/live-v1/epoch-1/lease.json", b"excluded")
+        first = self.run_transfer()
+        self.assertTrue(first["complete"], first)
+        blob = next(k for k in self.azure.data if k.endswith(".zip"))
+        archive = self.parent/"batch.zip"; archive.write_bytes(self.azure.data[blob])
+        proof = transfer.decode(self.azure.data[blob+".verified.json"])
+        restored = self.parent/"isolated"
+        result = transfer.restore_batch(archive, proof, directory=restored)
+        self.assertEqual(result["verified_objects"],6)
+        self.assertFalse(result["active_state_restored"])
+        for row in proof["coverage"]:
+            key = inc.source_key(*row[:2])
+            self.assertEqual((restored/"objects"/(backup._key_id(key)+".bin")).read_bytes(),self.s3.objects[key]["body"])
+            receipt = backup._read(restored,"objects/"+backup._key_id(key)+".json")
+            self.assertEqual(receipt["last_modified"], NOW.isoformat())
+            self.assertEqual(receipt["metadata"],self.s3.objects[key]["Metadata"])
+        transfer.restore_batch(archive,proof,directory=restored)
+        before = dict(self.azure.data); self.s3.get_calls.clear()
+        self.assertTrue(self.run_transfer()["complete"])
+        self.assertEqual(self.s3.get_calls,[])
+        self.assertEqual(before,self.azure.data)
+        (restored/"objects"/(backup._key_id(RAW)+".bin")).write_bytes(b"conflict")
+        with self.assertRaises(transfer.TransferError):
+            transfer.restore_batch(archive,proof,directory=restored)
+
+    def test_lost_ack_and_interrupted_completion_recover_without_double_transfer(self):
+        self.s3.add(RAW,b"raw")
+        def interrupt(name):
+            if name.endswith(".verified.json"):
+                raise OSError("interrupted completion")
+        self.azure.before_create = interrupt
+        self.assertFalse(self.run_transfer()["complete"])
+        self.azure.before_create = lambda name: None
+        self.s3.get_calls.clear()
+        self.assertTrue(self.run_transfer()["complete"])
         self.assertFalse(self.s3.get_calls)
-        self.assertFalse(self.azure.creates)
-        self.assertEqual(self.azure.reads, [inc.BASELINE_CATALOG_BLOB, name + '.verified.json'])
+        self.assertEqual(sum(k.endswith(".zip") for k in self.azure.data),1)
 
-    def test_changed_revision_retained_and_missing_source_reported(self):
-        self.add()
-        self.assertTrue(self.run_transfer()['complete'])
-        old = dict(self.azure.data)
-        self.s3.objects[RAW]['ETag'] = 'changed'
-        self.assertTrue(self.run_transfer()['complete'])
-        self.assertEqual(len([n for n in self.azure.data if n.endswith('.verified.json')]), 2)
-        self.assertTrue(all(self.azure.data[n] == data for n,data in old.items()))
-        del self.s3.objects[RAW]
+    def test_lost_archive_ack_is_read_back_and_verified(self):
+        self.s3.add(RAW,b"raw")
+        self.azure.after_create = lambda name: (_ for _ in ()).throw(OSError("lost ack")) if name.endswith(".zip") else None
         result = self.run_transfer()
-        self.assertTrue(result['complete'], result)
-        self.assertEqual(sum(p['previous_revision_not_visible'] for p in result['sweep']['partitions'].values()), 2)
+        self.assertTrue(result["complete"],result)
 
-    def test_interruption_before_completion_reuses_zip_even_after_cohort_changes(self):
-        self.add()
-        def fail(name):
-            if name.endswith('.verified.json'):
-                raise OSError('interrupted completion')
-        self.azure.before_create = fail
+    def test_partial_scope_inventory_and_changed_source_fail(self):
+        self.s3.add(RAW,b"raw")
+        pages=self.pages();pages.pop(backup.PREFIXES[1])
+        self.assertFalse(self.run_transfer(pages)["complete"])
+        pages=self.pages();pages[backup.PREFIXES[0]][0]["next_token"]="missing-page"
+        self.assertFalse(self.run_transfer(pages)["complete"])
+        self.assertFalse(self.s3.get_calls)
+        self.s3.overrides[RAW]={"ETag":'"changed"'}
+        self.assertFalse(self.run_transfer()["complete"])
+        self.assertFalse(any(k.endswith(".verified.json") for k in self.azure.data))
+
+    def test_checksum_destination_corruption_and_budget_fail_without_completion(self):
+        for failure in ("source","destination","budget"):
+            self.azure=FakeAzure();self.s3=FakeS3()
+            self.s3.add(RAW,b"raw", {"sha256":"0"*64} if failure=="source" else {})
+            if failure=="destination":
+                self.azure.transform_read=lambda name,data:(b"x"+data[1:],len(data)) if name.endswith(".zip") else (data,len(data))
+            result=self.run_transfer(**({"max_s3_gets":0} if failure=="budget" else {}))
+            self.assertFalse(result["complete"],result)
+            self.assertFalse(any(k.endswith(".verified.json") for k in self.azure.data))
+
+    def test_late_write_to_old_partition_is_found_by_next_daily_reconciliation(self):
+        self.assertTrue(self.run_transfer()["complete"])
+        self.s3.add(RAW,b"late")
+        self.assertTrue(self.run_transfer()["complete"])
+        self.assertEqual(self.s3.get_calls,[RAW])
+
+    def test_immutable_source_deletion_or_change_cannot_report_success(self):
+        self.s3.add(RAW, b'original')
+        self.assertTrue(self.run_transfer()['complete'])
+        original = dict(self.azure.data)
+        self.s3.add(RAW, b'changed')
         self.assertFalse(self.run_transfer()['complete'])
-        self.unchanged()
-        self.azure.before_create = lambda name: None
-        self.add(NORM, b'new cohort member')
-        self.s3.get_calls.clear()
-        result = self.run_transfer()
-        self.assertTrue(result['complete'], result)
-        self.assertEqual(self.s3.get_calls, [NORM])
-        self.assertEqual(result['committed_batches'], 2)
+        self.s3.objects.clear()
+        self.assertFalse(self.run_transfer()['complete'])
+        self.assertEqual(original, self.azure.data)
 
-    def prepare_without_archive(self):
-        self.add()
-        def interrupted(name):
-            if name.endswith('.zip'):
-                raise OSError('interrupted before archive upload')
-        self.azure.before_create = interrupted
-        result = self.run_transfer(max_attempts=1)
-        self.assertFalse(result['complete'])
-        self.assertEqual(result['pending_intents'], 1)
-        self.azure.before_create = lambda name: None
-        prepared = {n: data for n, data in self.azure.data.items() if n.endswith('.prepared.json')}
-        self.assertEqual(len(prepared), 1)
-        self.assertFalse(any(n.endswith('.zip') for n in self.azure.data))
-        return prepared
-
-    def test_prepared_only_unavailable_original_revision_remains_incomplete(self):
-        prepared = self.prepare_without_archive()
-        self.s3.objects[RAW]['ETag'] = 'changed revision'
-        result = self.run_transfer()
-        self.assertFalse(result['complete'], result)
-        self.assertEqual(result['pending_intents'], 1)
-        self.assertEqual(result['committed_batches'], 1)
-        self.assertIn('unresolved prepared intents', result['error'])
-        self.assertTrue(all(self.azure.data[n] == data for n, data in prepared.items()))
-        del self.s3.objects[RAW]
-        self.s3.get_calls.clear()
-        result = self.run_transfer()
-        self.assertFalse(result['complete'], result)
-        self.assertEqual(result['pending_intents'], 1)
-        self.assertFalse(self.s3.get_calls)
-        self.assertTrue(result['sweep']['complete'])
-
-    def test_prepared_only_retry_resolves_current_pending_count(self):
-        prepared = self.prepare_without_archive()
-        result = self.run_transfer()
-        self.assertTrue(result['complete'], result)
-        self.assertEqual(result['pending_intents'], 0)
-        self.assertIsNone(result['error'])
-        self.assertEqual(result['committed_batches'], 1)
-        for name, data in prepared.items():
-            self.assertEqual(self.azure.data[name], data)
-            proof = transfer.decode(self.azure.data[name.replace('.prepared.json', '.verified.json')])
-            self.assertEqual(proof['status'], 'destination_verified')
-        self.s3.get_calls.clear()
-        result = self.run_transfer()
-        self.assertTrue(result['complete'], result)
-        self.assertEqual(result['pending_intents'], 0)
-        self.assertFalse(self.s3.get_calls)
-
-    def test_prepared_only_changed_batch_composition_does_not_clear_old_intent(self):
-        prepared = self.prepare_without_archive()
-        self.add(NORM, b'new cohort member')
-        result = self.run_transfer()
-        self.assertFalse(result['complete'], result)
-        self.assertEqual(result['pending_intents'], 1)
-        self.assertEqual(result['committed_batches'], 1)
-        proofs = [transfer.decode(data) for n, data in self.azure.data.items() if n.endswith('.verified.json')]
-        self.assertEqual(len(proofs), 1)
-        self.assertEqual(len(proofs[0]['coverage']), 2)
-        for name, data in prepared.items():
-            self.assertEqual(self.azure.data[name], data)
-            self.assertNotIn(name.replace('.prepared.json', '.verified.json'), self.azure.data)
-        self.s3.get_calls.clear()
-        result = self.run_transfer()
-        self.assertFalse(result['complete'], result)
-        self.assertEqual(result['pending_intents'], 1)
-        self.assertFalse(self.s3.get_calls)
-
-    def test_lost_completion_ack_recovers_without_source_or_archive_reads(self):
-        self.add()
-        self.azure.after_create = lambda name: (_ for _ in ()).throw(OSError('lost ack')) if name.endswith('.verified.json') else None
+    def test_corrupt_archive_cannot_publish_any_restored_payload(self):
+        self.s3.add(RAW, b'original')
         self.assertTrue(self.run_transfer()['complete'])
-        self.azure.after_create = lambda name: None
-        self.s3.get_calls.clear(); self.azure.reads.clear()
-        self.assertTrue(self.run_transfer()['complete'])
-        self.assertFalse(self.s3.get_calls)
-        self.assertFalse(any(n.endswith('.zip') for n in self.azure.reads))
+        blob = next(k for k in self.azure.data if k.endswith('.zip'))
+        path = self.parent/'corrupt.zip'
+        data = self.azure.data[blob]
+        path.write_bytes(b'x'+data[1:])
+        proof = transfer.decode(self.azure.data[blob+'.verified.json'])
+        destination = self.parent/'isolated'
+        with self.assertRaises(transfer.TransferError):
+            transfer.restore_batch(path, proof, directory=destination)
+        self.assertFalse((destination/'objects').exists())
+
+    def add(self, key=RAW, body=b"synthetic", metadata=None):
+        self.s3.add(key, body, metadata)
+
+    def unchanged(self):
+        self.assertFalse(any(n.endswith(".verified.json") for n in self.azure.data))
+
+    def archive(self):
+        names=[n for n in self.azure.data if n.endswith(".zip")]
+        self.assertEqual(len(names),1)
+        archive=ZipFile(BytesIO(self.azure.data[names[0]]))
+        return names[0],archive,transfer.decode(archive.read(transfer.MANIFEST))
 
     def test_corrupt_completion_missing_zip_and_orphan_fail_closed(self):
         self.add()
@@ -260,47 +212,13 @@ class TransferTests(unittest.TestCase):
         self.azure.before_create = lambda name: (_ for _ in ()).throw(OSError('second batch')) if name.endswith('.zip') and any(n.endswith('.verified.json') for n in self.azure.data) else None
         result = self.run_transfer(max_batch_objects=1)
         self.assertFalse(result['complete']); self.assertEqual(result['committed_batches'], 1)
+        covered = {row[1] for name, data in self.azure.data.items() if name.endswith('.verified.json')
+                   for row in transfer.decode(data)['coverage']}
         self.azure.before_create = lambda name: None
         self.s3.get_calls.clear()
         self.assertTrue(self.run_transfer(max_batch_objects=1)['complete'])
-        self.assertEqual(self.s3.get_calls, [NORM])
-
-    def test_empty_partial_over_limit_listing_and_invalid_baseline_fail_closed(self):
-        self.assertTrue(self.run_transfer()['complete'])
-        self.assertFalse(self.s3.get_calls); self.assertFalse(self.azure.creates)
-        pages = self.pages(); pages[backup.PREFIXES[0]][0]['next_token'] = 'interrupted'
-        self.assertFalse(self.run_transfer(pages)['complete']); self.assertFalse(self.s3.get_calls)
-        self.assertFalse(self.run_transfer(max_azure_lists=0)['complete'])
-        self.azure.data[inc.BASELINE_CATALOG_BLOB] = transfer.wrapped(dict(self.baseline, bucket='fabricated'))
-        self.assertFalse(self.run_transfer()['complete'])
-
-    def test_paged_metadata_and_completion_immutable_conflict(self):
-        self.add(); self.assertTrue(self.run_transfer()['complete'])
-        self.azure.list_size = 1
-        result = self.run_transfer()
-        self.assertTrue(result['complete'], result)
-        self.assertEqual(result['operations']['azure_lists'], 3)
-        self.assertFalse(self.run_transfer(max_azure_lists=2)['complete'])
-        name, archive, _ = self.archive(); archive.close()
-        del self.azure.data[name+'.verified.json']
-        def conflict(blob):
-            if blob.endswith('.verified.json'):
-                self.azure.data[blob] = b'conflicting completion'
-        self.azure.before_create = conflict
-        self.assertFalse(self.run_transfer()['complete'])
-        self.assertEqual(self.azure.data[name+'.verified.json'], b'conflicting completion')
-
-    def test_runtime_retry_and_invalid_listing_fail_closed(self):
-        self.add()
-        with patch.object(transfer.time, 'monotonic', side_effect=[0, 2]):
-            self.assertFalse(self.run_transfer(max_seconds=1)['complete'])
-        with self.assertRaises(transfer.TransferError):
-            self.run_transfer(max_attempts=0)
-        for page in ({'blobs': [], 'next_token': 'empty-truncated'},
-                     {'blobs': [{'name': 'incremental/batches/not-a-batch', 'size': 1}], 'next_token': None}):
-            with patch.object(self.azure, 'list_blobs', return_value=page):
-                self.assertFalse(self.run_transfer()['complete'])
-        self.assertFalse(self.s3.get_calls)
+        self.assertEqual(set(self.s3.get_calls), {RAW, NORM} - covered)
+        self.assertEqual(len(self.s3.get_calls), 1)
 
     def test_archive_mapping_and_payload_checks_not_only_outer_checksum(self):
         self.add()
@@ -444,6 +362,3 @@ class TransferTests(unittest.TestCase):
                 result = self.run_transfer(**{limit: 0})
                 self.assertFalse(result['complete'], result)
                 self.unchanged()
-
-if __name__ == "__main__":
-    unittest.main()

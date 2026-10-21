@@ -14,6 +14,8 @@ from zipfile import ZipFile
 from aws_shadow_forecast import Consumer, LEASE, POINTER, ROOT
 from evidence_backup import PREFIXES
 from tools import package_shadow
+from tornredeye.evidence_paths import LINEAGE, evidence_keys, EVIDENCE_PREFIX
+from uuid import UUID
 
 
 START = datetime(2026, 10, 10, tzinfo=timezone.utc)
@@ -77,12 +79,13 @@ class S3:
         self.lists.append(args)
         keys = sorted(k for k in self.objects if k.startswith(args["Prefix"]))
         offset = int(args.get("ContinuationToken", "0"))
-        selected = keys[offset:offset+2]
+        page_size = min(args.get("MaxKeys", 2), 2)
+        selected = keys[offset:offset+page_size]
         result = {"Contents": [{"Key": k, "LastModified": self.objects[k]["LastModified"],
                                 "ETag": self.objects[k]["ETag"]} for k in selected],
-                  "IsTruncated": offset + 2 < len(keys)}
+                  "IsTruncated": offset + page_size < len(keys)}
         if result["IsTruncated"]:
-            result["NextContinuationToken"] = str(offset + 2)
+            result["NextContinuationToken"] = str(offset + page_size)
         return result
 
 
@@ -97,7 +100,7 @@ class ConsumerTests(unittest.TestCase):
     def raw(self, minute, quantity, *, source=None, stored=None, identifier=None):
         retrieved = START + timedelta(minutes=minute)
         source = int(retrieved.timestamp()) - 1 if source is None else source
-        key = PREFIXES[0] + f"{identifier if identifier is not None else int(minute*1000):032x}.bin"
+        key = evidence_keys(retrieved, UUID(int=identifier if identifier is not None else int(minute*1000)))[0]
         body = json.dumps({"timestamp": source, "stocks": {"haw": {
             "update": source, "stocks": [{"id": 1485, "name": "Shark Fin",
                                          "quantity": quantity, "cost": 100}]}}}).encode()
@@ -106,7 +109,9 @@ class ConsumerTests(unittest.TestCase):
         self.s3.put_object(Bucket="private-evidence", Key=key, Body=body, IfNoneMatch="*",
                            Metadata={"source": "YATA", "retrieved-at": retrieved.isoformat(),
                                      "sha256": hashlib.sha256(body).hexdigest(),
-                                     "http-status": "200", "status": "observed"})
+                                     "http-status": "200", "acquisition-status": "success", "lineage": LINEAGE,
+                                     "source-url": "https://yata.yt/api/v1/travel/export/",
+                                     "collection-id": key.split("/")[-2]})
         self.clock.value = previous
         return key
 
@@ -135,7 +140,7 @@ class ConsumerTests(unittest.TestCase):
             if args["Key"].startswith(ROOT):
                 self.assertTrue(args.get("IfNoneMatch") == "*" or
                                 (args["Key"] in (POINTER, LEASE) and "IfMatch" in args))
-        self.assertTrue(any("ContinuationToken" in c for c in self.s3.lists))
+        self.assertTrue(all(c["Prefix"] != EVIDENCE_PREFIX for c in self.s3.lists))
 
     def test_delayed_processing_uses_original_persistence_not_processing_time(self):
         self.raw(2, 0)
@@ -148,6 +153,7 @@ class ConsumerTests(unittest.TestCase):
         self.assertEqual(outcome["resolved_at_utc"], "2026-10-10T03:02:30.000000Z")
         self.assertEqual(result["summary"]["unrecorded_slots"], 2)
         self.assertEqual(self.read(result["forecast_key"])["training_count"], 1)
+
 
     def test_late_persistence_cannot_repair_missing_outcome(self):
         self.raw(2, 0)
@@ -178,11 +184,12 @@ class ConsumerTests(unittest.TestCase):
         self.raw(1.5, 8, source=stamp, identifier=99)
         self.raw(2, 0, source=stamp-1, identifier=1)
         self.raw(2.1, 8, source=stamp, identifier=55)
-        key = PREFIXES[1] + 'f'*32 + '.json'
+        key = evidence_keys(START+timedelta(minutes=2.2), UUID(hex='f'*32))[1]
         self.clock.at(2.2)
         self.s3.put_object(Bucket="private-evidence", Key=key, IfNoneMatch="*", Body=json.dumps({
             "collection_id": 'f'*32, "retrieved_at": (START+timedelta(minutes=2.2)).isoformat(),
-            "status": "collection_failed"}).encode())
+            "format": "stock-evidence", "schema_version": 1, "lineage": LINEAGE,
+            "acquisition": {"status": "collection_failed"}, "raw_evidence": None}).encode())
         result = self.invoke(2.5)
         forecast = self.read(result["forecast_key"])
         self.assertEqual(forecast["origin"]["observation"]["quantity"], 8)
@@ -191,7 +198,7 @@ class ConsumerTests(unittest.TestCase):
         # a repeated receipt cannot renew the source timestamp
         self.clock.at(7)
         snapshot, points = self.consumer().evidence(self.clock())
-        from availability_forecast import _select
+        from tornredeye.availability_forecast import _select
         self.assertEqual(_select(points, [p["at"] for p in points], self.clock())["status"], "stale")
 
     def test_ambiguous_forecast_write_recovers_exact_record_after_target(self):
@@ -258,6 +265,97 @@ class ConsumerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "invalid canonical raw"):
             self.consumer().evidence(self.clock())
 
+    def test_hour_boundary_complete_bounded_queries_and_delayed_old_partition(self):
+        self.raw(59.8, 8)
+        self.raw(59.9, 0, stored=62)
+        self.clock.at(60.2)
+        snapshot, points = self.consumer().evidence(self.clock())
+        self.assertEqual(snapshot["coverage"]["prefixes"], [EVIDENCE_PREFIX+"2026/10/10/00/", EVIDENCE_PREFIX+"2026/10/10/01/"])
+        self.assertTrue(snapshot["coverage"]["inventory_complete"])
+        self.assertEqual(len(snapshot["rows"]), 1)
+        self.assertEqual(points[-1]["observation"]["quantity"], 8)
+        self.assertTrue(all(len(c["Prefix"]) > len(EVIDENCE_PREFIX) for c in self.s3.lists))
+        self.assertFalse(any(c["Prefix"] == EVIDENCE_PREFIX for c in self.s3.lists))
+
+    def test_recovery_epoch_does_not_reuse_old_training_or_identity(self):
+        self.raw(2, 0)
+        old = self.invoke(2.5)
+        self.raw(62, 8)
+        self.invoke(63)
+        self.clock.at(68)
+        result = self.consumer(epoch="recovery-2").run()
+        doc = self.read(result["forecast_key"])
+        self.assertEqual(doc["training_count"], 0)
+        self.assertEqual(doc["forecast_epoch"], "recovery-2")
+        self.assertNotEqual(self.read(old["forecast_key"])["forecast_id"], doc["forecast_id"])
+
+    def test_parseable_transport_failure_raw_is_not_an_observation(self):
+        key = self.raw(2, 8)
+        self.s3.objects[key]["Metadata"]["acquisition-status"] = "collection_failed"
+        result = self.invoke(2.5)
+        self.assertEqual(self.read(result["forecast_key"])["origin"]["status"], "no_observation")
+
+    def test_raw_only_long_context_keeps_original_acquisition_outcome(self):
+        from dataclasses import replace
+        from s3_persistence import PersistenceError, persist
+        from yata_collector import normalize
+        for status in ("success", "collection_failed"):
+            with self.subTest(status=status):
+                self.setUp()
+                key = self.raw(2, 8)
+                body = self.s3.objects.pop(key)["data"]
+                at = START + timedelta(minutes=2)
+                result = replace(normalize(body, at), status=status, detail="diagnostic" * 3000,
+                                 response_headers=(("Retry-After", "9" * 6000),))
+                document_key = evidence_keys(at, UUID(int=2000))[1]
+                self.clock.at(2)
+                self.s3.fail = (document_key, "before")
+                with self.assertRaises(PersistenceError):
+                    persist(result, s3=self.s3, bucket="private-evidence", collection_id=UUID(int=2000))
+                self.assertNotIn(document_key, self.s3.objects)
+                self.assertEqual(self.s3.objects[key]["Metadata"]["acquisition-status"], status)
+                self.assertNotIn("acquisition", self.s3.objects[key]["Metadata"])
+                self.clock.at(2.5)
+                snapshot, points = self.consumer().evidence(self.clock())
+                self.assertEqual(len(snapshot["rows"]), 1)
+                if status == "success":
+                    self.assertEqual(points[-1]["observation"]["quantity"], 8)
+                else:
+                    self.assertIsNone(points[-1]["observation"])
+                    self.assertEqual(snapshot["rows"][0]["issues"], ["collection_failed"])
+
+    def test_truncated_or_repeated_hour_inventory_cannot_issue(self):
+        self.raw(2, 8)
+        original = self.s3.list_objects_v2
+        def broken(**args):
+            page = original(**args)
+            if args['Prefix'].startswith(EVIDENCE_PREFIX):
+                page.update(IsTruncated=True, NextContinuationToken='same')
+            return page
+        with patch.object(self.s3, 'list_objects_v2', side_effect=broken):
+            with self.assertRaises(ValueError):
+                self.invoke(2.5)
+        self.assertFalse(any(k.endswith('/forecast.json') for k in self.s3.objects))
+
+    def test_duplicate_raw_and_document_count_once_and_validate_link(self):
+        from s3_persistence import persist
+        from yata_collector import normalize
+        at = START + timedelta(minutes=2)
+        key = self.raw(2, 8)
+        body = self.s3.objects.pop(key)['data']
+        self.clock.at(2)
+        receipt = persist(normalize(body, at), s3=self.s3, bucket='private-evidence', collection_id=UUID(int=2000))
+        self.clock.at(2.5)
+        snapshot, points = self.consumer().evidence(self.clock())
+        self.assertEqual(len(snapshot['rows']), 1)
+        self.assertEqual(len(snapshot['objects']), 2)
+        self.assertEqual(points[-1]['observation']['quantity'], 8)
+        doc = self.read(receipt.normalized_key)
+        doc['raw_evidence']['sha256'] = '0'*64
+        self.s3.objects[receipt.normalized_key]['data'] = json.dumps(doc).encode()
+        with self.assertRaisesRegex(ValueError, 'integrity mismatch'):
+            self.consumer().evidence(self.clock())
+
     def test_package_and_permissions_keep_consumer_independent(self):
         with tempfile.TemporaryDirectory() as temporary:
             package_shadow.package(Path(temporary)/"consumer.zip")
@@ -272,7 +370,7 @@ class ConsumerTests(unittest.TestCase):
         statements = resources["ConsumerRole"]["Properties"]["Policies"][0]["PolicyDocument"]["Statement"]
         for statement in statements:
             if statement["Action"] == ["s3:PutObject"]:
-                self.assertTrue(all(ROOT in r["Fn::Sub"] for r in (statement["Resource"] if isinstance(statement["Resource"], list) else [statement["Resource"]])))
+                self.assertTrue(all("/live-v1/" in r["Fn::Sub"] for r in (statement["Resource"] if isinstance(statement["Resource"], list) else [statement["Resource"]])))
                 self.assertIn("Condition", statement)
         self.assertFalse(any(r["Type"] == "AWS::S3::Bucket" for r in resources.values()))
 

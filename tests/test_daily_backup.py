@@ -33,7 +33,7 @@ class DailyBackupTests(unittest.TestCase):
             'GITHUB_EVENT_NAME': 'schedule', 'RUNNER_TEMP': self.temporary.name,
             'BACKUP_AWS_BUCKET': 'synthetic-private-bucket', 'BACKUP_AWS_OWNER': '123456789012',
             'BACKUP_AWS_REGION': 'eu-north-1', 'BACKUP_AZURE_ACCOUNT': 'syntheticaccount',
-            'BACKUP_AZURE_CONTAINER': 'synthetic-backups', 'BACKUP_BASELINE_CATALOG_SHA256': 'a'*64,
+            'BACKUP_AZURE_CONTAINER': 'synthetic-backups', 'BACKUP_ANCHOR_SHA256': 'a'*64,
         }
         self.calls = []
         self.sas = SAS
@@ -114,7 +114,7 @@ class DailyBackupTests(unittest.TestCase):
     def test_configuration_injection_and_missing_pin_fail_before_cloud_access(self):
         for key, value in (('BACKUP_AZURE_ACCOUNT', 'account;echo secret'),
                            ('BACKUP_AZURE_CONTAINER', 'bad--name'),
-                           ('BACKUP_BASELINE_CATALOG_SHA256', ''), ('BACKUP_AWS_OWNER', '123')):
+                           ('BACKUP_ANCHOR_SHA256', ''), ('BACKUP_AWS_OWNER', '123')):
             with self.subTest(key=key):
                 original = self.environment[key]
                 self.environment[key] = value

@@ -6,7 +6,8 @@ from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MODULES = ("lambda_function.py", "s3_persistence.py", "yata_collector.py", "polling_guard.py")
+MODULES = ("lambda_function.py", "s3_persistence.py", "yata_collector.py", "polling_guard.py",
+           "tornredeye/__init__.py", "tornredeye/normalization.py", "tornredeye/evidence_paths.py")
 ARTIFACT = ROOT / ".aws-sam" / "collector.zip"
 
 

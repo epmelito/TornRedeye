@@ -10,8 +10,8 @@ import math
 from pathlib import Path
 import sys
 
-from evidence_backup import PREFIXES
-from stock_history import _time, _utc
+from tornredeye.evidence_paths import is_normalized, counterpart, evidence_identity
+from tornredeye.stock_history import _time, _utc
 
 
 HORIZON = timedelta(hours=1)
@@ -62,14 +62,14 @@ def _rows(history, country, item_id, attempts):
     extra_attempts = 0
     for row in attempts:
         key, at = row.get("key"), _time(row.get("retrieved_at"))
-        if (not isinstance(key, str) or not key.startswith(PREFIXES[1])
+        if (not isinstance(key, str) or not is_normalized(key)
                 or not key.endswith(".json") or key in attempt_keys):
             raise ValueError("invalid or duplicate normalized attempt key")
-        identifier = key[len(PREFIXES[1]):-5]
-        if not identifier or "/" in identifier:
-            raise ValueError("invalid normalized attempt identity")
+        partition, _, _ = evidence_identity(key)
+        if at.replace(minute=0, second=0, microsecond=0) != partition:
+            raise ValueError("attempt retrieval partition mismatch")
         attempt_keys.add(key)
-        raw_key = PREFIXES[0] + identifier + ".bin"
+        raw_key = counterpart(key)
         if raw_key in keys:
             if keys[raw_key] != at:
                 raise ValueError("history/attempt retrieval mismatch")

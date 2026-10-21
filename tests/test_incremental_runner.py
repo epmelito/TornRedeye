@@ -15,12 +15,13 @@ import incremental_backup as coverage
 import incremental_runner as runner
 import incremental_transfer as engine
 from test_evidence_backup import FakeS3, BoundedBody, CUTOFF, NOW
+from tornredeye.evidence_paths import evidence_keys
+from uuid import UUID
 
 BUCKET = 'synthetic-private-bucket'
 OWNER = '123456789012'
-BASE = coverage.source_key('r', '00'+'1'*30)
-RAW = coverage.source_key('r', '01'+'2'*30)
-NORM = coverage.source_key('n', '02'+'3'*30)
+BASE = evidence_keys(NOW, UUID(int=1))[0]
+RAW, NORM = evidence_keys(NOW, UUID(int=2))
 
 
 class Response(BoundedBody):
@@ -122,7 +123,7 @@ class AdapterTests(unittest.TestCase):
 
     def test_azure_streams_exact_empty_binary_and_existing_conflict(self):
         for size in (0, 2*evidence.CHUNK+5):
-            name = 'incremental/batches/'+str(size)+'.zip'
+            name = coverage.BATCH_PREFIX+str(size)+'.zip'
             data = bytes(range(256))*(size//256)+b'x'*(size%256)
             self.azure.create_block_blob(name, BoundedBody(data), len(data))
             blob = self.azure.open_blob(name)
@@ -142,22 +143,22 @@ class AdapterTests(unittest.TestCase):
 
     def test_azure_paginated_xml_and_size_bound(self):
         for n in range(3):
-            self.service.data[f'incremental/batches/{n}.zip'] = b'xx'
+            self.service.data[f'{coverage.BATCH_PREFIX}{n}.zip'] = b'xx'
         self.service.page_size = 2
-        first = self.azure.list_blobs(prefix='incremental/batches/', continuation_token=None, page_size=5000)
-        last = self.azure.list_blobs(prefix='incremental/batches/', continuation_token=first['next_token'], page_size=5000)
+        first = self.azure.list_blobs(prefix=coverage.BATCH_PREFIX, continuation_token=None, page_size=5000)
+        last = self.azure.list_blobs(prefix=coverage.BATCH_PREFIX, continuation_token=first['next_token'], page_size=5000)
         self.assertEqual([b['name'] for b in first['blobs']+last['blobs']], sorted(self.service.data))
         self.assertIsNone(last['next_token'])
         self.assertEqual(self.service.connections[-1].target.split('?')[1].split('&')[:2],
                          ['restype=container', 'comp=list'])
         self.azure.max_listing_bytes = 1
         with self.assertRaises(engine.TransferError):
-            self.azure.list_blobs(prefix='incremental/batches/', continuation_token=None, page_size=5000)
+            self.azure.list_blobs(prefix=coverage.BATCH_PREFIX, continuation_token=None, page_size=5000)
         self.assertTrue(self.service.connections[-1].closed)
 
     def test_azure_maps_only_correct_statuses_and_rejects_bad_headers_xml(self):
         with self.assertRaises(engine.BlobMissing):
-            self.azure.open_blob('baseline/missing')
+            self.azure.open_blob(coverage.BATCH_PREFIX+"missing")
         for status, code, expected in ((404, 'ContainerNotFound', engine.TransferError),
                 (403, 'AuthenticationFailed', engine.TransferError), (503, 'ServerBusy', OSError),
                 (301, None, engine.TransferError), (409, 'LeaseAlreadyPresent', engine.TransferError)):
@@ -165,23 +166,23 @@ class AdapterTests(unittest.TestCase):
             fake.getresponse.return_value = Response(status, **{'x-ms-error-code': code})
             self.azure.connection_factory = lambda *a, **kw: fake
             with self.assertRaises(expected):
-                self.azure.open_blob('baseline/example')
+                self.azure.open_blob(coverage.BATCH_PREFIX+"example")
             fake.close.assert_called()
         for data in (b'<invalid/>', b'<!DOCTYPE x><EnumerationResults/>',
                      b'<EnumerationResults><Blobs/></EnumerationResults>'):
             fake.getresponse.return_value = Response(data=data)
             with self.assertRaises(engine.TransferError):
-                self.azure.list_blobs(prefix='incremental/batches/', continuation_token=None, page_size=5000)
+                self.azure.list_blobs(prefix=coverage.BATCH_PREFIX, continuation_token=None, page_size=5000)
         fake.getresponse.return_value = Response(data=b'payload', **{'Content-Length': '7'})
         with self.assertRaises(engine.TransferError):
-            self.azure.open_blob('baseline/example')
+            self.azure.open_blob(coverage.BATCH_PREFIX+"example")
 
     def test_azure_rejects_sas_operation_override_and_truncated_upload(self):
         for token in ('sig=synthetic&prefix=unapproved', 'sig=synthetic&sig=other', 'sig=synthetic\n'):
             with self.assertRaises(engine.TransferError):
                 runner.AzureBlobs('syntheticaccount', 'synthetic-container', token)
         with self.assertRaises(engine.TransferError):
-            self.azure.create_block_blob('incremental/batches/example.zip', BoundedBody(b'x'), 2)
+            self.azure.create_block_blob(coverage.BATCH_PREFIX+'example.zip', BoundedBody(b'x'), 2)
         self.assertTrue(self.service.connections[-1].closed)
         self.assertFalse(self.service.data)
 
@@ -254,11 +255,7 @@ class EntryTests(unittest.TestCase):
         temp = tempfile.TemporaryDirectory()
         cls.fixture = temp
         path = Path(temp.name)
-        source = FakeS3(); source.add(BASE, b'baseline')
-        evidence.inventory(s3=source, bucket=BUCKET, directory=path/'evidence', paused_cutoff_utc=CUTOFF)
-        evidence.export(s3=source, directory=path/'evidence')
-        cls.baseline = coverage.build_baseline_catalog(path/'evidence', output_directory=path/'catalog',
-                                                       verified_archive_sha256=coverage.BASELINE_SHA256)
+        cls.baseline = coverage.empty_anchor(BUCKET)
     @classmethod
     def tearDownClass(cls):
         cls.fixture.cleanup()
@@ -269,13 +266,13 @@ class EntryTests(unittest.TestCase):
         self.sdk = SDK(); self.sdk.fake.add(BASE, b'baseline')
         self.source = runner.S3Source(self.sdk, BUCKET, OWNER)
         self.service = Service()
-        self.service.data[coverage.BASELINE_CATALOG_BLOB] = engine.wrapped(self.baseline)
+        self.service.data[coverage.ANCHOR_BLOB] = engine.wrapped(self.baseline)
         self.azure = runner.AzureBlobs('syntheticaccount', 'synthetic-container', 'sig=synthetic',
                                       connection_factory=self.service.connect)
         self.factory = Mock(return_value=(self.source, self.azure))
         self.args = ['--bucket', BUCKET, '--owner', OWNER, '--region', 'eu-north-1',
             '--azure-account', 'syntheticaccount', '--azure-container', 'synthetic-container',
-            '--baseline-catalog-sha256', evidence._digest(self.baseline), '--scratch-parent', str(self.parent)]
+            '--anchor-sha256', evidence._digest(self.baseline), '--scratch-parent', str(self.parent)]
     def invoke(self, gated=True):
         output = StringIO()
         with redirect_stdout(output):
@@ -290,13 +287,10 @@ class EntryTests(unittest.TestCase):
         self.assertEqual(self.invoke()[0], 1)
         self.factory.assert_not_called()
         self.args[3] = OWNER
-        del self.service.data[coverage.BASELINE_CATALOG_BLOB]
+        del self.service.data[coverage.ANCHOR_BLOB]
         status, result = self.invoke()
-        self.assertEqual(status, 1)
-        self.assertIn('bootstrap required', result['error'])
-        self.assertEqual(self.source.requests, 0)
-        self.assertFalse(self.sdk.fake.get_calls)
-        self.assertFalse(any(n.startswith('incremental/') for n in self.service.data))
+        self.assertEqual(status, 0, result)
+        self.assertIn(coverage.ANCHOR_BLOB,self.service.data)
 
     def test_entry_real_adapters_exact_transfer_verified_restart_and_lost_ack(self):
         self.sdk.fake.add(RAW, b'\x00\xfforiginal', {'source': 'synthetic'})
@@ -305,8 +299,8 @@ class EntryTests(unittest.TestCase):
         status, result = self.invoke()
         self.assertEqual(status, 0, result)
         self.assertEqual(result['committed_batches'], 1)
-        self.assertEqual(result['source_inventory']['requests'], 2)
-        self.assertEqual(result['operations']['s3_list'], 2)
+        self.assertEqual(result['source_inventory']['requests'], len(evidence.PREFIXES))
+        self.assertEqual(result['operations']['s3_list'], len(evidence.PREFIXES))
         before = dict(self.service.data)
         self.sdk.fake.get_calls.clear()
         self.service.page_size = 1
@@ -353,7 +347,7 @@ class EntryTests(unittest.TestCase):
         self.assertFalse(self.service.connections)
 
     def test_entry_rejects_untrusted_catalog_and_shared_scratch_writer(self):
-        self.service.data[coverage.BASELINE_CATALOG_BLOB] = engine.wrapped(dict(self.baseline, bucket='other'))
+        self.service.data[coverage.ANCHOR_BLOB] = engine.wrapped(dict(self.baseline, bucket='other'))
         status, result = self.invoke()
         self.assertEqual(status, 1)
         self.assertEqual(self.source.requests, 0)

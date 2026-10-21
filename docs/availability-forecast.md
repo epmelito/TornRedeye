@@ -1,6 +1,6 @@
 # Offline availability baseline
 
-`availability_forecast.py` compares an expanding historical availability
+`tornredeye.availability_forecast` compares an expanding historical availability
 probability with last observed state persistence. The operation selects a country
 and item; Hawaii Shark Fin (`haw`, `1485`) is the initial research case.
 Python 3.11 and the standard library suffice. The command reads existing history,
@@ -23,10 +23,10 @@ Its `key` and original `retrieved_at` identify each collection attempt;
 `document_status` distinguishes recorded collection failures from other absent
 target evidence. Matching raw-history/attempt records are joined by original
 collection key and must agree on retrieval time. Additional attempts carry no
-target value. The existing `normalized/yata/jap/206/` and matching raw prefixes
-identify the collector's full YATA exports, including other selected countries.
-They do not restrict forecasting to Japan. Omitting this index limits known
-attempt coverage and the evidence cutoff to the supplied history.
+target value. Operational attempts use the matching `evidence/live-v1/` retrieval-hour keys.
+Use the preserved original code/configuration for Issue #49's sealed historical
+cohort. Its frozen rules below are unchanged; new-lineage results are a separate
+cohort and do not establish historical continuity.
 
 All timestamps must be timezone aware. Unplaceable evidence, simultaneous
 retrievals without established order, duplicate identities, mismatched retrieval
@@ -38,7 +38,7 @@ From the repository root in PowerShell:
 
 ```powershell
 . ./.chatgpt/powershell-helpers.ps1
-Invoke-NativeCommand python @('-B', 'availability_forecast.py', 'C:\private\history.jsonl', '--attempts', 'C:\private\normalized-attempts.jsonl', '--country', 'haw', '--item-id', '1485')
+Invoke-NativeCommand python @('-B', '-m', 'tornredeye.availability_forecast', 'C:\private\history.jsonl', '--attempts', 'C:\private\normalized-attempts.jsonl', '--country', 'haw', '--item-id', '1485')
 ```
 
 Output contains private evidence keys, quantities and input identities. Capture
