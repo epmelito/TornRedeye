@@ -14,6 +14,12 @@
         "DISABLED",
         "ENABLED"
       ]
+    },
+    "ForecastEpoch": {
+      "Type": "String",
+      "Default": "epoch-1",
+      "AllowedPattern": "[a-z0-9][a-z0-9-]{0,62}",
+      "Description": "New identifier for a cold-start recovery epoch; never reuse a restored active state."
     }
   },
   "Rules": {
@@ -73,10 +79,15 @@
                     "Fn::Sub": "arn:${AWS::Partition}:s3:::${EvidenceBucket}"
                   },
                   "Condition": {
-                    "StringEquals": {
+                    "StringLike": {
                       "s3:prefix": [
-                        "raw/yata/jap/206/",
-                        "normalized/yata/jap/206/"
+                        "evidence/live-v1/*",
+                        {
+                          "Fn::Sub": "forecasts/live-v1/records/${ForecastEpoch}/*"
+                        },
+                        {
+                          "Fn::Sub": "forecast-state/live-v1/${ForecastEpoch}/*"
+                        }
                       ]
                     }
                   }
@@ -88,13 +99,13 @@
                   ],
                   "Resource": [
                     {
-                      "Fn::Sub": "arn:${AWS::Partition}:s3:::${EvidenceBucket}/raw/yata/jap/206/*"
+                      "Fn::Sub": "arn:${AWS::Partition}:s3:::${EvidenceBucket}/evidence/live-v1/*"
                     },
                     {
-                      "Fn::Sub": "arn:${AWS::Partition}:s3:::${EvidenceBucket}/normalized/yata/jap/206/*"
+                      "Fn::Sub": "arn:${AWS::Partition}:s3:::${EvidenceBucket}/forecasts/live-v1/records/${ForecastEpoch}/*"
                     },
                     {
-                      "Fn::Sub": "arn:${AWS::Partition}:s3:::${EvidenceBucket}/shadow/haw/1485/v1/*"
+                      "Fn::Sub": "arn:${AWS::Partition}:s3:::${EvidenceBucket}/forecast-state/live-v1/${ForecastEpoch}/*"
                     }
                   ]
                 },
@@ -103,9 +114,17 @@
                   "Action": [
                     "s3:PutObject"
                   ],
-                  "Resource": {
-                    "Fn::Sub": "arn:${AWS::Partition}:s3:::${EvidenceBucket}/shadow/haw/1485/v1/*"
-                  },
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:s3:::${EvidenceBucket}/forecasts/live-v1/records/${ForecastEpoch}/*"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:s3:::${EvidenceBucket}/forecast-state/live-v1/${ForecastEpoch}/head.json"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:s3:::${EvidenceBucket}/forecast-state/live-v1/${ForecastEpoch}/lease.json"
+                    }
+                  ],
                   "Condition": {
                     "StringEquals": {
                       "s3:if-none-match": "*"
@@ -119,10 +138,10 @@
                   ],
                   "Resource": [
                     {
-                      "Fn::Sub": "arn:${AWS::Partition}:s3:::${EvidenceBucket}/shadow/haw/1485/v1/head.json"
+                      "Fn::Sub": "arn:${AWS::Partition}:s3:::${EvidenceBucket}/forecast-state/live-v1/${ForecastEpoch}/head.json"
                     },
                     {
-                      "Fn::Sub": "arn:${AWS::Partition}:s3:::${EvidenceBucket}/shadow/haw/1485/v1/lease.json"
+                      "Fn::Sub": "arn:${AWS::Partition}:s3:::${EvidenceBucket}/forecast-state/live-v1/${ForecastEpoch}/lease.json"
                     }
                   ],
                   "Condition": {
@@ -173,6 +192,9 @@
           "Variables": {
             "EVIDENCE_BUCKET": {
               "Ref": "EvidenceBucket"
+            },
+            "FORECAST_EPOCH": {
+              "Ref": "ForecastEpoch"
             }
           }
         }

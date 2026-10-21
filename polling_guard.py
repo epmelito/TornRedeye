@@ -5,7 +5,7 @@ import logging
 import time
 from uuid import UUID, uuid4
 
-CONTROL_KEY = "control/yata/jap/206/polling.json"
+CONTROL_KEY = "control/yata/polling.json"
 MINIMUM_SPACING_SECONDS = 60
 LEASE_SECONDS = 180
 MAX_WAIT_SECONDS = 15

@@ -6,13 +6,15 @@ import math
 import os
 import re
 
+from tornredeye.evidence_paths import LINEAGE, evidence_identity
+
 UTC = timezone.utc
 SNAPSHOT_KEY = "public/data.json"
 MAX_BYTES = 192 * 1024
-RECORD_BYTES = 64 * 1024
+RECORD_BYTES = 1024 * 1024
 PAGES = 2
 EVENTS_PER_PAGE = 100
-OBSERVATION = re.compile(r"persisted collection_id=([0-9a-f]{32}|[0-9a-f-]{36}) status=observed\b")
+OBSERVATION = re.compile(r"persisted collection_id=([0-9a-f]{32}|[0-9a-f-]{36}) acquisition_status=success\b")
 REPORT = re.compile(r"REPORT RequestId: ([0-9a-f-]{36}).*Billed Duration: ([0-9.]+) ms.*Memory Size: ([0-9]+) MB")
 
 
@@ -127,7 +129,7 @@ def build_snapshot(clients, config, now, budget=lambda: None):
         "window": {"start_utc": stamp(start), "end_utc": stamp(end), "timezone": "UTC"},
         "metrics": {}, "recent_gaps": [], "freshness": {"state": "unavailable", "retrieved_at_utc": None,
             "source_timestamp_utc": None, "export_timestamp_utc": None, "kind": "measured",
-            "provenance": "selected normalized observed evidence", "coverage": "latest candidate within two-hour logs only"},
+            "provenance": "selected persisted all-stock acquisition; country freshness varies", "coverage": "latest candidate within two-hour logs only"},
         "billed_compute": {"state": "unavailable", "kind": "derived", "unit": "GB-seconds",
             "value": None, "start_utc": stamp(now - timedelta(hours=2)), "end_utc": stamp(now),
             "provenance": "deduplicated Lambda REPORT lines; billed duration and configured memory",
@@ -156,18 +158,26 @@ def build_snapshot(clients, config, now, budget=lambda: None):
         snapshot["recent_heartbeat"] = {"state": "unavailable", "samples": [], "coverage": "query unavailable"}
     log_start = now - timedelta(hours=2)
     try:
-        events, coverage = read_logs(clients["logs"], config["COLLECTOR_LOG_GROUP"], '"persisted" "status=observed"', log_start, now, budget)
+        events, coverage = read_logs(clients["logs"], config["COLLECTOR_LOG_GROUP"], '"persisted" "acquisition_status=success"', log_start, now, budget)
         candidates = []
         for event in sorted(events, key=lambda e: e.get("timestamp", 0), reverse=True):
             match = OBSERVATION.search(event.get("message", ""))
             if match:
                 identity = match[1].replace("-", "")
-                if re.fullmatch("[0-9a-f]{32}", identity) and identity not in candidates:
-                    candidates.append(identity)
-        for identity in candidates[:3]:
+                key_match = re.search(r"normalized_key=(\S+)", event.get("message", ""))
+                if not key_match:
+                    continue
+                key = key_match[1]
+                try:
+                    _, key_id, kind = evidence_identity(key)
+                except ValueError:
+                    continue
+                if kind == "attempt.json" and key_id.hex == identity and (identity, key) not in candidates:
+                    candidates.append((identity, key))
+        for identity, key in candidates[:3]:
             try:
                 budget()
-                response = clients["s3"].get_object(Bucket=config["EVIDENCE_BUCKET"], Key=f"normalized/yata/jap/206/{identity}.json")
+                response = clients["s3"].get_object(Bucket=config["EVIDENCE_BUCKET"], Key=key)
                 stream = response["Body"]
                 try:
                     body = stream.read(RECORD_BYTES + 1)
@@ -176,13 +186,16 @@ def build_snapshot(clients, config, now, budget=lambda: None):
                 if len(body) > RECORD_BYTES:
                     continue
                 record = json.loads(body)
-                if record.get("schema_version") != 1 or record.get("status") != "observed" or str(record.get("collection_id", "")).replace("-", "") != identity:
+                if (record.get("schema_version") != 1 or record.get("format") != "stock-evidence"
+                        or record.get("lineage") != LINEAGE or record.get("acquisition", {}).get("status") != "success"
+                        or record.get("validation_status") not in ("complete", "partial")
+                        or str(record.get("collection_id", "")).replace("-", "") != identity):
                     continue
                 retrieved = timestamp(record.get("retrieved_at"), now)
                 if retrieved is None:
                     continue
                 snapshot["freshness"].update(state="available", retrieved_at_utc=retrieved,
-                    source_timestamp_utc=timestamp(record.get("source_timestamp"), now),
+                    source_timestamp_utc=None,
                     export_timestamp_utc=timestamp(record.get("export_timestamp"), now), coverage=coverage + "; latest validated candidate, not guaranteed latest evidence")
                 break
             except Exception:

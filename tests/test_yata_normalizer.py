@@ -7,7 +7,7 @@ import json
 import unittest
 
 from yata_collector import normalize
-from yata_normalizer import normalize_export
+from tornredeye.normalization import normalize_export
 
 
 NOW = datetime(2026, 10, 18, 12, tzinfo=timezone.utc)
@@ -225,17 +225,10 @@ class NormalizeExportTests(unittest.TestCase):
         self.assertIsNone(result["export_timestamp"])
         self.assertEqual(result["diagnostics"], [{"path": [], "code": "http_failure"}])
 
-    def test_legacy_japan_interpretation_is_unchanged(self):
-        legacy = normalize(encode(PAYLOAD), NOW)
-        japan = run()["countries"]["jap"]
-        self.assertEqual(legacy.status, "observed")
-        self.assertEqual(japan["source_timestamp"], legacy.source_timestamp)
-        self.assertEqual(japan["items"][1], dict(item_id=legacy.observation.item_id,
-                         name=legacy.observation.name, quantity=legacy.observation.quantity,
-                         cost=legacy.observation.cost))
+    def test_acquisition_success_does_not_assert_export_validation(self):
         payload = deepcopy(PAYLOAD)
         payload["stocks"]["jap"]["stocks"].append(None)
-        self.assertEqual(normalize(encode(payload), NOW).status, "malformed")
+        self.assertEqual(normalize(encode(payload), NOW).status, "success")
         self.assertEqual(run(payload)["status"], "partial")
 
 

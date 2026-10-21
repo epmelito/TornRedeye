@@ -13,6 +13,7 @@ from dataclasses import dataclass, fields
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import tempfile
 import time
@@ -131,10 +132,10 @@ def decode(data):
 
 
 def identity(item):
-    kind, uuid = index_api.key_parts(item['key'])
+    index_api.key_parts(item['key'])
     fingerprint = index_api.revision_fingerprint(item)
     require(item.get('revision', fingerprint) == fingerprint, 'candidate revision inconsistent')
-    return f'{kind}/{uuid}/{fingerprint}'
+    return index_api.reference_id(item['key'], fingerprint)
 
 
 class Runner:
@@ -214,7 +215,7 @@ class Runner:
             self.remove(path)
 
     def create_verify(self, name, path, limit, retain=False, expected=None):
-        require(name.startswith('incremental/batches/'), 'immutable destination scope violation')
+        require((name.startswith(index_api.BATCH_PREFIX) or name == index_api.ANCHOR_BLOB), 'immutable destination scope violation')
         expected_size, expected_hash = expected if expected is not None else backup._file_hash(path)
         require(expected_size <= limit, 'destination size limit exceeded')
         for attempt in range(self.limits.max_attempts):
@@ -279,7 +280,7 @@ class Runner:
             version = response.get('VersionId')
             require(version is None or isinstance(version, str), 'invalid source version')
             checksum = self.pump(body, path, item['size'], self.limits.max_object_bytes)
-            if item['key'].startswith(backup.PREFIXES[0]) and 'sha256' in metadata:
+            if 'sha256' in metadata:
                 require(metadata['sha256'] == checksum, 'source SHA-256 mismatch')
             if response.get('ChecksumType') == 'FULL_OBJECT' and response.get('ChecksumSHA256'):
                 require(response['ChecksumSHA256'] == base64.b64encode(bytes.fromhex(checksum)).decode(),
@@ -381,12 +382,12 @@ class Runner:
                         digest.update(chunk)
                 require(count == receipt['size'] and digest.hexdigest() == receipt['sha256'],
                         'payload checksum mismatch')
-                if receipt['key'].startswith(backup.PREFIXES[0]) and 'sha256' in receipt['metadata']:
+                if 'sha256' in receipt['metadata']:
                     require(receipt['metadata']['sha256'] == receipt['sha256'], 'raw metadata checksum mismatch')
             require({info.filename for info in infos} == members, 'unexpected archive member')
             if 'coverage' in expected:
-                rows = [[*reference.split('/'), receipt['sha256'], receipt['size']]
-                        for reference, receipt in sorted(receipts.items())]
+                rows = sorted([[*index_api.key_parts(r['key']), index_api.revision_fingerprint(r['inventory']), r['sha256'], r['size']]
+                               for r in receipts.values()])
                 index_api.validate_completion(expected, self.bucket)
                 require(sorted(expected['coverage']) == rows, 'completion receipt mapping conflict')
             return manifest
@@ -395,9 +396,10 @@ class Runner:
         manifest = self.inspect_archive(persisted, prepared, items, observed=observed)
         rows = []
         for reference, receipt in sorted(manifest['receipts'].items()):
-            kind, identifier, revision = reference.split('/')
+            kind, identifier = index_api.key_parts(receipt['key'])
+            revision = index_api.revision_fingerprint(receipt['inventory'])
             rows.append([kind, identifier, revision, receipt['sha256'], receipt['size']])
-        value = dict(prepared, schema_version=2, status='destination_verified',
+        value = dict(prepared, schema_version=index_api.SCHEMA, status='destination_verified',
                      bucket=self.bucket, coverage=rows)
         index_api.validate_completion(value, self.bucket)
         self.json_create(prepared['blob'] + '.verified.json', value, self.limits.max_manifest_bytes)
@@ -411,7 +413,7 @@ class Runner:
         blobs, token, tokens, last = {}, None, set(), ''
         while True:
             page = self.budget.call('azure_lists', lambda: self.azure.list_blobs(
-                prefix='incremental/batches/', continuation_token=token, page_size=5000))
+                prefix=index_api.BATCH_PREFIX, continuation_token=token, page_size=5000))
             entries, following = page['blobs'], page['next_token']
             require(isinstance(entries, list) and len(entries) <= 5000, 'invalid Azure listing page')
             require(following is None or isinstance(following, str) and following
@@ -420,7 +422,7 @@ class Runner:
                 name, size = entry['name'], entry['size']
                 require(isinstance(name, str) and name > last, 'duplicate or unordered Azure listing')
                 last = name
-                prefix = 'incremental/batches/'
+                prefix = index_api.BATCH_PREFIX
                 require(name.startswith(prefix), 'unexpected Azure listing prefix')
                 suffix = name[len(prefix):]
                 batch, ending = suffix[:64], suffix[64:]
@@ -488,11 +490,11 @@ class Runner:
             self.remove(archive)
 
 
-def run_backup(*, s3, azure, bucket, baseline_catalog_sha256, inventories,
+def run_backup(*, s3, azure, bucket, anchor_sha256, inventories,
                limits=Limits(), scratch_parent=None):
     """One serialized offline-testable sweep; injected adapters own live access.
 
-    Pin the baseline catalog digest independently after verified archive bootstrap.
+    Pin the empty-lineage anchor independently before the first authorized run.
     Completed immutable manifests are trusted writer receipts, not cryptographic
     proof against a privileged writer. Scratch coverage is disposable. Full S3
     listing inputs must include both terminal prefixes; no source LIST is issued
@@ -507,16 +509,18 @@ def run_backup(*, s3, azure, bucket, baseline_catalog_sha256, inventories,
             root = Path(temporary)
             with backup._lock(root) as private:
                 runner = Runner(s3, azure, bucket, private, budget)
-                try:
-                    baseline, _ = runner.json_blob(index_api.BASELINE_CATALOG_BLOB, limits.max_manifest_bytes)
-                except BlobMissing as error:
-                    raise TransferError('verified baseline catalog unavailable; bootstrap required') from error
-                index_api.validate_baseline(baseline, baseline_catalog_sha256)
-                require(baseline['bucket'] == bucket, 'baseline bucket conflict')
+                expected_anchor = index_api.empty_anchor(bucket)
+                index_api.validate_anchor(expected_anchor, anchor_sha256)
+                anchor, _ = runner.json_blob(index_api.ANCHOR_BLOB, limits.max_manifest_bytes, optional=True)
+                if anchor is None:
+                    runner.json_create(index_api.ANCHOR_BLOB, expected_anchor, limits.max_manifest_bytes)
+                    anchor = expected_anchor
+                index_api.validate_anchor(anchor, anchor_sha256)
+                require(anchor['bucket'] == bucket, 'anchor bucket conflict')
                 blobs = runner.enumerate_batches()
                 coverage = root / 'coverage'
-                index_api.reconstruct_coverage(baseline, runner.completed_batches(blobs),
-                    trusted_catalog_sha256=baseline_catalog_sha256, output_directory=coverage,
+                index_api.reconstruct_coverage(anchor, runner.completed_batches(blobs),
+                    trusted_anchor_sha256=anchor_sha256, output_directory=coverage,
                     max_spool_bytes=limits.max_scratch_bytes // 3, check_runtime=budget.runtime)
                 budget.runtime()
                 plan = root / 'plan'
@@ -534,6 +538,8 @@ def run_backup(*, s3, azure, bucket, baseline_catalog_sha256, inventories,
                 for partition in index_api.PARTITIONS:
                     budget.runtime()
                     part = index_api.read_plan_partition(plan, partition)
+                    require(not part['changed'] and not part['previous_revision_not_visible'],
+                            'immutable source changed or disappeared; inspect retained backup receipts')
                     for item in sorted(part['new'] + part['changed'], key=lambda row: row['key']):
                         require(item['size'] <= limits.max_object_bytes and item['size'] <= limits.max_batch_bytes,
                                 'source object size limit exceeded')
@@ -558,3 +564,60 @@ def run_backup(*, s3, azure, bucket, baseline_catalog_sha256, inventories,
                       pending_intents=len(runner.pending_intents))
     result['operations'] = dict(budget.counts)
     return result
+
+
+def restore_batch(archive_path, completion, *, directory, limits=Limits()):
+    """Verify an entire batch before isolated, create-only local restoration.
+
+    The caller authenticates the completion's origin independently. Original S3
+    times remain receipt evidence; this never restores mutable processing state
+    or asserts that a later S3 upload has its original availability time.
+    """
+    index_api.validate_completion(completion, completion['bucket'])
+    budget = Budget(limits)
+    with backup._lock(directory) as root:
+        runner = Runner(None, None, completion['bucket'], root, budget)
+        manifest = runner.inspect_archive(Path(archive_path), completion)
+
+        def publish(name, source, expected_size, expected_hash):
+            target = backup._path(root, name)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.exists():
+                require(backup._file_hash(target) == (expected_size, expected_hash), 'restore destination conflict')
+                return
+            with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as output:
+                temporary = Path(output.name)
+                try:
+                    size, digest = 0, hashlib.sha256()
+                    while chunk := source.read(backup.CHUNK):
+                        budget.runtime()
+                        size += len(chunk)
+                        require(size <= expected_size, 'restore length mismatch')
+                        output.write(chunk)
+                        digest.update(chunk)
+                    output.flush()
+                    os.fsync(output.fileno())
+                except BaseException:
+                    output.close()
+                    temporary.unlink(missing_ok=True)
+                    raise
+            try:
+                require((size, digest.hexdigest()) == (expected_size, expected_hash), 'restore checksum mismatch')
+                os.link(temporary, target)
+            finally:
+                temporary.unlink(missing_ok=True)
+
+        from io import BytesIO
+        with ZipFile(archive_path) as archive:
+            for receipt in manifest['receipts'].values():
+                key_id = backup._key_id(receipt['key'])
+                with archive.open(receipt['payload_member']) as source:
+                    publish(f'objects/{key_id}.bin', source, receipt['size'], receipt['sha256'])
+                restored = dict(receipt, status='verified', source_content_length=receipt['size'],
+                                error=None, restored_from=completion['blob'])
+                data = wrapped(restored)
+                publish(f'objects/{key_id}.json', BytesIO(data), len(data), hashlib.sha256(data).hexdigest())
+        data = wrapped(completion)
+        publish(f"restores/{completion['batch']}.json", BytesIO(data), len(data), hashlib.sha256(data).hexdigest())
+        return {'verified_objects': len(manifest['receipts']), 'batch': completion['batch'],
+                'active_state_restored': False}

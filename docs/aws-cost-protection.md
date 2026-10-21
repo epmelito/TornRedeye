@@ -293,6 +293,10 @@ an approved funded account or a separate approved collection migration.
 
 ## Evidence continuity and recovery requirements
 
+Issue #53 starts a fresh operational lineage. The [current backup contract](evidence-backup.md)
+adds immutable prospective records and an independent empty-lineage anchor. The
+original archive, pins and recovery prerequisites remain sealed and unchanged.
+
 The [evidence backup workflow](evidence-backup.md) documents the Issue #19 offline
 tooling and its manifest/verification contract. It does not establish a completed
 live backup or authorize export, storage, collector pauses or restoration.
@@ -305,7 +309,7 @@ additional storage provider or encryption layer is required. Do not publish
 backups or manifests in GitHub/dashboard output. Live export, cloud configuration
 and recurring backup activation remain separately authorized operations.
 
-- Export every object in both canonical prefixes, including malformed, missing,
+- Export every object in the declared immutable operational evidence/forecast prefixes, including malformed, missing,
   failure, empty-body, full foreign-market payload and raw-only partial writes.
   Do not filter to observed status, latest records or Japan Xanax stock rows.
   A normalized record without raw evidence can be legitimate. Preserve exact

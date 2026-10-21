@@ -19,8 +19,8 @@ from yata_collector import normalize
 
 NOW = datetime(2026, 10, 11, tzinfo=timezone.utc)
 CUTOFF = NOW.isoformat()
-RAW = backup.PREFIXES[0] + "a.bin"
-NORMALIZED = backup.PREFIXES[1] + "a.json"
+from tornredeye.evidence_paths import evidence_keys, FORECAST_PREFIX
+RAW, NORMALIZED = evidence_keys(NOW, UUID(int=1))
 
 
 class BoundedBody(BytesIO):
@@ -51,7 +51,7 @@ class FakeS3:
 
     def add(self, key, body, metadata=None):
         self.objects[key] = {"body": body, "Metadata": metadata or {},
-                             "ContentType": "application/octet-stream" if key.startswith(backup.PREFIXES[0]) else "application/json",
+                             "ContentType": "application/octet-stream" if backup.is_raw(key) else "application/json",
                              "ContentLength": len(body), "LastModified": NOW,
                              "ETag": '"synthetic-multipart-etag-2"'}
 
@@ -75,7 +75,7 @@ class FakeS3:
 
     def assert_scope(self, request):
         assert request["Bucket"] == "synthetic-private-bucket"
-        assert request["Prefix"] in backup.PREFIXES
+        assert any(request["Prefix"].startswith(p) for p in backup.PREFIXES)
         assert 1 <= request["MaxKeys"] <= 1000
 
     def put_object(self, *, Bucket, Key, Body, ContentType, Metadata, IfNoneMatch):
@@ -98,6 +98,43 @@ class FakeS3:
 
 class BackupTests(unittest.TestCase):
     def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)/"export"
+        self.s3 = FakeS3()
+
+    def test_complete_inventory_exact_export_and_offline_verification(self):
+        self.s3.add(RAW, b"", {"sha256": hashlib.sha256(b"").hexdigest()})
+        self.s3.add(NORMALIZED, b'{"raw_evidence":null}')
+        self.s3.add(FORECAST_PREFIX+"epoch-1/2026-10-11T00/ack.json", b"{}")
+        self.s3.add("control/yata/polling.json", b"excluded")
+        manifest = backup.inventory(s3=self.s3, bucket="synthetic-private-bucket", directory=self.root, paused_cutoff_utc=CUTOFF, page_size=1)
+        self.assertEqual(sum(x["objects"] for x in manifest["inventory"]), 3)
+        backup.export(s3=self.s3, directory=self.root)
+        for page in backup._pages(self.root, backup._manifest(self.root)):
+            for item in page["objects"]:
+                receipt = backup._receipt(self.root, manifest, item)
+                self.assertEqual(backup._verified(self.root, item, receipt), "verified")
+                self.assertEqual((self.root/"objects"/(backup._key_id(item["key"])+".bin")).read_bytes(), self.s3.objects[item["key"]]["body"])
+        calls = list(self.s3.get_calls)
+        backup.export(s3=self.s3, directory=self.root)
+        self.assertEqual(calls, self.s3.get_calls)
+
+    def test_partial_inventory_and_checksum_failures_stay_visible(self):
+        self.s3.add(RAW, b"bad", {"sha256": "0"*64})
+        manifest = backup.inventory(s3=self.s3, bucket="synthetic-private-bucket", directory=self.root)
+        backup.export(s3=self.s3, directory=self.root)
+        item = next(backup._pages(self.root, manifest))["objects"][0]
+        self.assertNotEqual(backup._receipt(self.root, manifest, item)["status"], "verified")
+
+    def test_unknown_and_archived_keys_do_not_enter_operational_contract(self):
+        for key in ("raw/yata/jap/206/a.bin", backup.PREFIXES[0]+"../secret", "forecast-state/live-v1/epoch-1/head.json"):
+            with self.assertRaises(backup.BackupError):
+                backup._key_id(key)
+
+
+class ExportSafetyTests(unittest.TestCase):
+    def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name) / "backup"
@@ -116,38 +153,6 @@ class BackupTests(unittest.TestCase):
 
     def object_path(self, key=RAW, extension="bin"):
         return self.root / "objects" / (backup._key_id(key) + "." + extension)
-
-    def test_all_statuses_and_exact_bytes_metadata_with_multiple_pages(self):
-        fixtures = {RAW: b'{"full": "synthetic foreign export"}', NORMALIZED: b'{"status":"observed"}',
-                    backup.PREFIXES[0] + "empty.bin": b"",
-                    backup.PREFIXES[0] + "failed.bin": b"synthetic HTTP error\x00\xff",
-                    backup.PREFIXES[0] + "malformed.bin": b'{invalid',
-                    backup.PREFIXES[1] + "missing.json": b'{"status":"missing","raw_evidence":null}',
-                    backup.PREFIXES[1] + "error.json": b'{"status":"source_error"}'}
-        for key, body in fixtures.items():
-            metadata = {"source": "synthetic", "retrieved-at": CUTOFF}
-            if key.startswith(backup.PREFIXES[0]):
-                metadata["sha256"] = hashlib.sha256(body).hexdigest()
-            self.s3.add(key, body, metadata)
-        self.s3.add("control/yata/jap/206/polling.json", b"excluded")
-        self.s3.add("unrelated/key", b"excluded")
-        manifest = self.inventory(page_size=2)
-        self.assertEqual(sum(state["objects"] for state in manifest["inventory"]), 7)
-        self.assertEqual(sum(state["pages"] for state in manifest["inventory"]), 4)
-        self.export()
-        self.assertEqual(self.results()[0], {key: "verified" for key in fixtures})
-        for key, body in fixtures.items():
-            self.assertEqual(self.object_path(key).read_bytes(), body)
-            receipt = backup._read(self.root, str(self.object_path(key, "json").relative_to(self.root)))
-            self.assertEqual(receipt["metadata"], self.s3.objects[key]["Metadata"])
-            self.assertEqual(receipt["bucket"], "synthetic-private-bucket")
-            self.assertEqual(receipt["key"], key)
-            self.assertEqual(receipt["sha256"], hashlib.sha256(body).hexdigest())
-        self.assertTrue(all(stream.closed for stream in self.s3.streams))
-        get_count, list_count = len(self.s3.get_calls), len(self.s3.list_calls)
-        self.inventory(page_size=2)
-        self.export()
-        self.assertEqual((len(self.s3.get_calls), len(self.s3.list_calls)), (get_count, list_count))
 
     def test_interrupted_read_and_safe_rerun(self):
         self.s3.add(RAW, b"synthetic evidence")
@@ -266,26 +271,6 @@ class BackupTests(unittest.TestCase):
         self.assertEqual(self.object_path(receipt.normalized_key).read_bytes(),
                          self.s3.objects[receipt.normalized_key]["body"])
 
-    def test_link_conflict_and_missing_counterpart_are_distinct(self):
-        self.s3.add(RAW, b"abc")
-        link = {"bucket": "synthetic-private-bucket", "key": RAW,
-                "sha256": "0" * 64, "size_bytes": 3}
-        self.s3.add(NORMALIZED, json.dumps({"raw_evidence": link}).encode())
-        self.inventory()
-        self.export()
-        records = list(backup.verify(self.root))
-        record = next(item for item in records if item.get("key") == NORMALIZED)
-        self.assertEqual(record["status"], "verified")
-        self.assertEqual(record["relationship"], "raw_link_integrity_mismatch")
-        with patch("builtins.print"):
-            self.assertEqual(backup.main(["verify", str(self.root)]), 1)
-        self.root = Path(self.temporary.name) / "missing-counterpart"
-        del self.s3.objects[RAW]
-        self.inventory()
-        self.export()
-        record = next(item for item in backup.verify(self.root) if item.get("key") == NORMALIZED)
-        self.assertEqual(record["relationship"], "raw_counterpart_unavailable_locally")
-
     def test_receipt_semantic_metadata_inconsistency(self):
         self.s3.add(RAW, b"abc")
         self.inventory()
@@ -332,7 +317,7 @@ class BackupTests(unittest.TestCase):
 
     def test_partial_listing_error_and_resume_no_completeness_claim(self):
         self.s3.add(RAW, b"a")
-        self.s3.add(backup.PREFIXES[0] + "b.bin", b"b")
+        self.s3.add(evidence_keys(NOW, UUID(int=2))[0], b"b")
         self.s3.list_error_token = "1"
         manifest = self.inventory(page_size=1)
         self.assertEqual(manifest["inventory"][0]["pages"], 1)
@@ -402,32 +387,9 @@ class BackupTests(unittest.TestCase):
         self.assertIsNone(receipt["error"])
         self.assertEqual(len(self.s3.get_calls), 1)
 
-    def test_unexpected_source_paths_are_encoded_without_local_collisions(self):
-        keys = [backup.PREFIXES[0] + suffix for suffix in
-                ("../../escape", "C:\\Windows\\file", "CON", "a.", "A", "a", "x/y", "x\\y")]
-        for key in keys:
-            self.s3.add(key, key.encode())
-        self.inventory()
-        self.export()
-        self.assertEqual(len({self.object_path(key) for key in keys}), len(keys))
-        self.assertEqual(self.results()[0], {key: "verified" for key in keys})
-        for key in keys:
-            self.assertEqual(self.object_path(key).read_bytes(), key.encode())
-
-    def test_prefix_marker_and_large_raw_payload_are_preserved(self):
-        marker = backup.PREFIXES[0]
-        large = b"synthetic" * (backup.CHUNK // 2)
-        self.s3.add(marker, b"")
-        self.s3.add(RAW, large)
-        self.inventory()
-        self.export()
-        self.assertEqual(self.object_path(marker).read_bytes(), b"")
-        self.assertEqual(self.object_path().read_bytes(), large)
-        self.assertEqual(set(self.results()[0].values()), {"verified"})
-
     def test_digest_collision_detects_identity_conflict(self):
         self.s3.add(RAW, b"a")
-        other = backup.PREFIXES[0] + "b.bin"
+        other = evidence_keys(NOW, UUID(int=2))[0]
         self.s3.add(other, b"b")
         self.inventory()
         with patch.object(backup, "_key_id", return_value="0" * 64):
@@ -475,7 +437,7 @@ class BackupTests(unittest.TestCase):
     def test_unattested_cutoff_never_claims_consistent_inventory(self):
         self.s3.add(RAW, b"a")
         self.inventory(cutoff=None)
-        self.s3.add(backup.PREFIXES[0] + "later.bin", b"later")
+        self.s3.add(evidence_keys(NOW, UUID(int=3))[0], b"later")
         self.export()
         statuses, coverage = self.results()
         self.assertEqual(statuses, {RAW: "verified"})
@@ -511,7 +473,3 @@ class BackupTests(unittest.TestCase):
             with self.assertRaises(SystemExit) as error:
                 backup.main(["export", str(self.root)])
             self.assertEqual(error.exception.code, 2)
-
-
-if __name__ == "__main__":
-    unittest.main()

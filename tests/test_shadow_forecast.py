@@ -4,9 +4,11 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import unittest
 
-import availability_forecast as baseline
+from tornredeye import availability_forecast as baseline
 from evidence_backup import PREFIXES
-from shadow_forecast import OfflineShadowRun
+from tornredeye.evidence_paths import evidence_keys
+from uuid import UUID
+from tornredeye.shadow_forecast import OfflineShadowRun
 
 
 START = datetime(2026, 10, 10, tzinfo=timezone.utc)
@@ -31,7 +33,7 @@ def history(values):
         source = int(at.timestamp()) - 1 if len(value) == 2 else value[2]
         rows.append({"retrieved_at": at.isoformat(), "source_timestamp": source,
                      "quantity": quantity, "issues": [],
-                     "evidence_key": PREFIXES[0] + f"{index:032x}.bin"})
+                     "evidence_key": evidence_keys(at, UUID(int=index))[0]})
     return {"country": "haw", "item_id": 1485, "observations": rows}
 
 
@@ -194,7 +196,7 @@ class ShadowTests(unittest.TestCase):
         self.observe([(0, 0)])
         self.run.issue()
         self.clock.at(59)
-        attempt = {"key": PREFIXES[1]+f"{1:032x}.json",
+        attempt = {"key": evidence_keys(self.clock(), UUID(int=1))[1],
                    "retrieved_at": self.clock().isoformat(), "document_status": "observed"}
         self.run.observe(history([(0, 0)]), attempts=iter([attempt]))
         snapshot = self.run.report()["snapshots"][-1]
@@ -216,7 +218,7 @@ class ShadowTests(unittest.TestCase):
         self.observe([(0, 0)])
         self.run.issue()
         self.clock.at(60)
-        attempts = [{"key": PREFIXES[1]+"f"*32+".json",
+        attempts = [{"key": evidence_keys(self.clock(), UUID(hex="f"*32))[1],
                      "retrieved_at": self.clock().isoformat(),
                      "document_status": "collection_failed"}]
         self.run.observe(history([(0, 0), (59, 8)]), attempts=attempts)

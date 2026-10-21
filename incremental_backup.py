@@ -1,6 +1,6 @@
 """Verified batch coverage and disposable bounded reconciliation; no cloud SDK.
 
-Checksums detect corruption, not forgery. Authenticate the baseline catalog
+Checksums detect corruption, not forgery. Authenticate the empty-lineage anchor
 and completion-manifest origin. Full provenance stays in unchanged archives.
 """
 
@@ -14,9 +14,12 @@ import time
 
 import evidence_backup as backup
 
-BASELINE_BLOB = "baseline/yata-cutoff-20261011.7z"
-BASELINE_SHA256 = "e57758215de330b7f9db1fd8a75754ba2161764f32824cfb2485bcf639cef5f8"
-SCHEMA = 1
+from tornredeye.evidence_paths import LINEAGE, PREFIXES, validate_backup_key
+
+AZURE_ROOT = f"operational/{LINEAGE}/"
+ANCHOR_BLOB = AZURE_ROOT + "anchor.json"
+BATCH_PREFIX = AZURE_ROOT + "batches/"
+SCHEMA = 3
 PARTITIONS = tuple(f"{number:02x}" for number in range(256))
 MAX_RECORDS = 65_536
 MAX_PARTITION_BYTES = 16 * 1024 ** 2
@@ -25,8 +28,6 @@ MAX_BATCHES = 8192
 MAX_COMPLETION_BYTES = 16 * 1024 ** 2
 MAX_BATCH_OBJECTS = 4096
 MAX_ARCHIVE_BYTES = 128 * 1024 ** 2
-BASELINE_CATALOG_BLOB = "baseline/yata-cutoff-20261011.coverage.json"
-KINDS = {"r": (backup.PREFIXES[0], ".bin"), "n": (backup.PREFIXES[1], ".json")}
 
 
 class CatalogError(backup.BackupError):
@@ -57,25 +58,38 @@ def _utc(value):
 
 
 def key_parts(key):
-    """Validate lowercase UUID.hex filenames, without imposing a UUID version.
-
-    persist accepts any UUID object; the live handler generates uuid4 objects.
-    """
-    _require(isinstance(key, str), "invalid source key")
-    for kind, (prefix, extension) in KINDS.items():
-        if key.startswith(prefix):
-            suffix = key[len(prefix):]
-            _require(re.fullmatch(r"[0-9a-f]{32}" + re.escape(extension), suffix),
-                     "unknown collector key format")
-            return kind, suffix[:32]
-    raise CatalogError("unknown collector key prefix")
+    try:
+        validate_backup_key(key)
+    except ValueError as error:
+        raise CatalogError("unknown operational object key") from error
+    return "object", key
 
 
 def source_key(kind, identifier):
-    _require(isinstance(kind, str) and kind in KINDS and isinstance(identifier, str)
-             and re.fullmatch(r"[0-9a-f]{32}", identifier), "invalid collection identity")
-    prefix, extension = KINDS[kind]
-    return prefix + identifier + extension
+    _require(kind == "object", "invalid object identity")
+    key_parts(identifier)
+    return identifier
+
+
+def reference_id(key, revision):
+    return backup._digest({"key": key, "revision": revision})
+
+
+def partition_for(key):
+    return backup._key_id(key)[:2]
+
+
+def empty_anchor(bucket):
+    _require(isinstance(bucket, str) and bool(bucket), "missing source bucket")
+    return {"schema_version": SCHEMA, "format": "empty-lineage-anchor", "lineage": LINEAGE,
+            "bucket": bucket, "prefixes": list(PREFIXES)}
+
+
+def validate_anchor(value, trusted_anchor_sha256):
+    _hash(trusted_anchor_sha256)
+    _require(value == empty_anchor(value["bucket"])
+             and backup._digest(value) == trusted_anchor_sha256, "untrusted lineage anchor")
+    return value
 
 
 def revision_fingerprint(item):
@@ -110,56 +124,6 @@ def _write_bounded(root, name, value, limit):
     return size
 
 
-def _baseline_records(directory, verified_archive_sha256, max_objects, max_pages, max_bytes):
-    """Reuse historical page, receipt, payload and relationship verification."""
-    _require(isinstance(verified_archive_sha256, str)
-             and verified_archive_sha256.lower() == BASELINE_SHA256, "untrusted baseline archive")
-    root = Path(directory).absolute()
-    manifest = backup._manifest(root)
-    _require(bool(manifest["bucket"]), "missing source bucket")
-    _require(all(s["complete"] and not s["error"] for s in manifest["inventory"]),
-             "incomplete baseline inventory")
-    cutoff = _utc(manifest["paused_cutoff_utc"])
-    count = sum(s["objects"] for s in manifest["inventory"])
-    size = sum(s["bytes"] for s in manifest["inventory"])
-    _require(count <= max_objects and size <= max_bytes
-             and sum(s["pages"] for s in manifest["inventory"]) <= max_pages, "baseline limit exceeded")
-    yield manifest["bucket"], {"cutoff_utc": cutoff, "objects": count, "bytes": size}
-    expected = {backup._page_name(i, n) for i, s in enumerate(manifest["inventory"])
-                for n in range(s["pages"])}
-    verified_count, verified_bytes = 0, 0
-    for page in backup._pages(root, manifest):
-        for item in page["objects"]:
-            kind, identifier = key_parts(item["key"])
-            fingerprint = revision_fingerprint(item)
-            verified_count += 1
-            verified_bytes += item["size"]
-            _require(verified_count <= max_objects and verified_bytes <= max_bytes,
-                     "baseline verification limit exceeded")
-            key_id = backup._key_id(item["key"])
-            payload, receipt_member = f"objects/{key_id}.bin", f"objects/{key_id}.json"
-            expected.update((payload, receipt_member))
-            _require(backup._path(root, payload).stat().st_size == item["size"],
-                     "baseline payload length inconsistent")
-            receipt = backup._receipt(root, manifest, item)
-            _require(receipt is not None and receipt.get("status") == "verified"
-                     and not receipt.get("error"), "baseline receipt not verified")
-            _require(backup._verified(root, item, receipt) == "verified",
-                     "baseline payload or metadata inconsistent")
-            relationship = backup._relationship(root, manifest, item)
-            allowed = ({"normalized_receipt_present", "no_normalized_local_receipt"} if kind == "r"
-                       else {"raw_link_verified", "no_raw_link"})
-            _require(relationship in allowed, "baseline relationship unresolved")
-            _require(receipt.get("version_id") is None or isinstance(receipt["version_id"], str),
-                     "invalid source version")
-            yield [kind, identifier, fingerprint, receipt["sha256"], item["size"]]
-    for folder in ("inventory", "objects"):
-        for path in backup._path(root, folder).rglob("*"):
-            relative = path.relative_to(root).as_posix()
-            backup._path(root, relative)
-            _require(not path.is_file() or relative in expected, "unindexed baseline evidence")
-
-
 def _append(root, partition, record):
     data = backup._bytes(record) + b"\n"
     with (root / (partition + ".jsonl")).open("ab") as stream:
@@ -188,67 +152,14 @@ def _record(row):
     _require(type(row[4]) is int and row[4] >= 0, "invalid covered byte length")
 
 
-def _validate_baseline(value):
-    _require(value["schema_version"] == SCHEMA and value["prefixes"] == list(backup.PREFIXES)
-             and isinstance(value["bucket"], str) and bool(value["bucket"]), "invalid baseline catalog")
-    baseline, rows = value["baseline"], value["coverage"]
-    _require(baseline["blob"] == BASELINE_BLOB and baseline["sha256"] == BASELINE_SHA256,
-             "untrusted baseline reference")
-    _utc(baseline["cutoff_utc"])
-    _require(isinstance(rows, list), "invalid baseline coverage")
-    seen, size = set(), 0
-    for row in rows:
-        _record(row)
-        _require(tuple(row[:2]) not in seen, "duplicate or conflicting baseline identity")
-        seen.add(tuple(row[:2]))
-        size += row[4]
-    _require(type(baseline["objects"]) is int and baseline["objects"] == len(rows)
-             and type(baseline["bytes"]) is int and baseline["bytes"] == size,
-             "incomplete baseline coverage")
-
-
-def build_baseline_catalog(directory, *, output_directory, verified_archive_sha256,
-                           max_objects=100_000, max_pages=10_000, max_bytes=100 * 1024 ** 3):
-    """Build once from a SHA-verified, safely extracted historical archive.
-
-    The SHA argument attests to checking the archive before extraction. Pin the
-    returned catalog digest independently; a remote self-checksum is not trust.
-    No partial catalog can be loaded as verified baseline coverage.
-    """
-    _limits(max_objects=max_objects, max_pages=max_pages, max_bytes=max_bytes)
-    try:
-        with backup._lock(output_directory) as root:
-            _empty(root)
-            records = _baseline_records(directory, verified_archive_sha256, max_objects, max_pages, max_bytes)
-            bucket, baseline = next(records)
-            baseline.update(blob=BASELINE_BLOB, sha256=BASELINE_SHA256)
-            value = {"schema_version": SCHEMA, "bucket": bucket, "prefixes": list(backup.PREFIXES),
-                     "baseline": baseline, "coverage": list(records)}
-            _validate_baseline(value)
-            _write_bounded(root, "baseline.json", value, MAX_COMPLETION_BYTES)
-            return value
-    except CatalogError:
-        raise
-    except (backup.BackupError, OSError, KeyError, TypeError, ValueError, AttributeError) as error:
-        raise CatalogError("invalid baseline evidence") from error
-
-
-def validate_baseline(value, trusted_catalog_sha256):
-    """Validate the independently pinned catalog, not an arbitrary remote hash."""
-    _hash(trusted_catalog_sha256)
-    _require(backup._digest(value) == trusted_catalog_sha256, "untrusted baseline catalog")
-    _validate_baseline(value)
-    return value
-
-
 def batch_blob(batch):
     _hash(batch)
-    return "incremental/batches/" + batch + ".zip"
+    return BATCH_PREFIX + batch + ".zip"
 
 
 def validate_completion(value, bucket):
     """Completion rows come only from independently verified persisted receipts."""
-    _require(value["schema_version"] == 2 and value["status"] == "destination_verified"
+    _require(value["schema_version"] == SCHEMA and value["status"] == "destination_verified"
              and value["bucket"] == bucket, "invalid batch completion")
     _hash(value["batch"])
     _require(value["blob"] == batch_blob(value["batch"]), "batch destination conflict")
@@ -261,7 +172,7 @@ def validate_completion(value, bucket):
     refs, payload_bytes = set(), 0
     for row in rows:
         _record(row)
-        ref = "/".join(row[:3])
+        ref = reference_id(source_key(row[0], row[1]), row[2])
         _require(ref not in refs, "duplicate completion revision")
         refs.add(ref)
         payload_bytes += row[4]
@@ -271,7 +182,7 @@ def validate_completion(value, bucket):
     return value
 
 
-def reconstruct_coverage(baseline, completions, *, trusted_catalog_sha256, output_directory,
+def reconstruct_coverage(anchor, completions, *, trusted_anchor_sha256, output_directory,
                          max_records_per_partition=MAX_RECORDS, max_partition_bytes=MAX_PARTITION_BYTES,
                          max_spool_bytes=4 * 1024 ** 3, check_runtime=lambda: None):
     """Rebuild disposable local coverage; never publish or replace remote catalogs.
@@ -281,21 +192,20 @@ def reconstruct_coverage(baseline, completions, *, trusted_catalog_sha256, outpu
     """
     _limits(max_records_per_partition=max_records_per_partition, max_partition_bytes=max_partition_bytes,
             max_spool_bytes=max_spool_bytes)
-    validate_baseline(baseline, trusted_catalog_sha256)
+    validate_anchor(anchor, trusted_anchor_sha256)
     with backup._lock(output_directory) as root:
         _empty(root)
         records = root / "records"
         records.mkdir()
-        header = {"schema_version": SCHEMA, "complete": False, "bucket": baseline["bucket"],
-                  "baseline": dict(baseline["baseline"]), "baseline_catalog_sha256": trusted_catalog_sha256,
-                  "batches": {"baseline": dict(baseline["baseline"])}, "partitions": {}}
+        header = {"schema_version": SCHEMA, "complete": False, "bucket": anchor["bucket"],
+                  "anchor_sha256": trusted_anchor_sha256, "batches": {}, "partitions": {}}
         total = 0
         counts, sizes = dict.fromkeys(PARTITIONS, 0), dict.fromkeys(PARTITIONS, 0)
         def append(row, batch):
             nonlocal total
             check_runtime()
             data = row + [batch]
-            partition = row[1][:2]
+            partition = partition_for(row[1])
             length = len(backup._bytes(data)) + 1
             counts[partition] += 1
             sizes[partition] += length
@@ -304,8 +214,6 @@ def reconstruct_coverage(baseline, completions, *, trusted_catalog_sha256, outpu
             total += length
             _require(total <= max_spool_bytes, "coverage spool limit exceeded")
             _append(records, partition, data)
-        for row in baseline["coverage"]:
-            append(row, "baseline")
         for value in completions:
             validate_completion(value, header["bucket"])
             batch = value["batch"]
@@ -361,8 +269,8 @@ def _reference(entry, coverage):
     descriptor = coverage["batches"][batch]
     return {"key": key, "revision": revision, "sha256": checksum, "size": size,
             "batch": batch, "blob": descriptor["blob"], "batch_sha256": descriptor["sha256"],
-            "receipt_member": ("objects/" + backup._key_id(key) + ".json" if batch == "baseline" else "receipts.json"),
-            "receipt_entry": None if batch == "baseline" else f"{kind}/{identifier}/{revision}"}
+            "receipt_member": "receipts.json",
+            "receipt_entry": reference_id(key, revision)}
 
 
 def _plan_partition(value, observations, index):
@@ -394,7 +302,7 @@ def plan_reconciliation(coverage_directory, inventories, *, output_directory,
                         max_objects_per_partition=MAX_RECORDS, max_records_per_partition=MAX_RECORDS,
                         max_partition_bytes=MAX_PARTITION_BYTES, max_pages=262_144,
                         max_spool_bytes=4 * 1024 ** 3, max_output_bytes=4 * 1024 ** 3, max_seconds=3600):
-    """Scan full prefixes, then reconcile one UUID partition at a time.
+    """Scan full prefixes, then reconcile one key-hash partition at a time.
 
     inventories maps canonical prefixes to saved-format page iterables. Every
     key is validated before routing; narrow partition listings hide unknown formats.
@@ -421,7 +329,7 @@ def plan_reconciliation(coverage_directory, inventories, *, output_directory,
             index = load_coverage(coverage_directory)
             summary["coverage_sha256"] = backup._digest(index)
             summary["bucket"] = index["bucket"]
-            _require(set(inventories) == set(backup.PREFIXES), "both complete prefixes required")
+            _require(set(inventories) == set(backup.PREFIXES), "all complete prefixes required")
             counts = dict.fromkeys(PARTITIONS, 0)
             for prefix in backup.PREFIXES:
                 token, last, complete, tokens = None, "", False, set()
@@ -442,7 +350,7 @@ def plan_reconciliation(coverage_directory, inventories, *, output_directory,
                         revision_fingerprint(item)
                         _require(item["key"].startswith(prefix) and item["key"] > last,
                                  "duplicate, conflicting, or unordered inventory key")
-                        last, partition = item["key"], identifier[:2]
+                        last, partition = item["key"], partition_for(identifier)
                         counts[partition] += 1
                         _require(counts[partition] <= max_objects_per_partition, "source partition object limit exceeded")
                         observation = {"key": item["key"], "size": item["size"],

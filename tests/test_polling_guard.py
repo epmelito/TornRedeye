@@ -51,6 +51,11 @@ class MemoryS3:
     def state(self):
         return json.loads(self.objects[CONTROL_KEY]["Body"])
 
+    def list_objects_v2(self, *, Bucket, Prefix, MaxKeys):
+        keys = sorted(key for key in self.objects if key.startswith(Prefix))
+        return {"IsTruncated": len(keys) > MaxKeys,
+                "Contents": [{"Key": key} for key in keys[:MaxKeys]]}
+
     def get_object(self, *, Bucket, Key):
         if self.get_error:
             raise self.get_error
@@ -451,8 +456,8 @@ class GuardedHandlerTests(unittest.TestCase):
         for summary in (first, second):
             document = json.loads(self.s3.objects[summary["normalized_key"]]["Body"])
             self.assertEqual(document["collection_id"], summary["collection_id"])
-            self.assertEqual(document["observation"]["quantity"], 0)
-            self.assertEqual(document["source_timestamp"], 1)
+            self.assertEqual(document["countries"]["jap"]["items"][0]["quantity"], 0)
+            self.assertEqual(document["countries"]["jap"]["source_timestamp"], 1)
 
     def test_handler_waits_and_preserves_request_spacing_and_distinct_evidence(self):
         requests = []
@@ -504,11 +509,11 @@ class GuardedHandlerTests(unittest.TestCase):
                             with self.assertRaises(handler.CollectionError):
                                 self.invoke()
                     document = json.loads(next(v["Body"] for k, v in self.evidence().items()
-                                               if k.startswith("normalized/")))
+                                               if k.endswith("/attempt.json")))
                     self.assertEqual(document["http_status"], status)
-                    self.assertEqual(document["response_headers"], list(map(list, headers.items())))
+                    self.assertEqual(document["acquisition"]["response_headers"], list(map(list, headers.items())))
                     self.assertEqual(next(v["Body"] for k, v in self.evidence().items()
-                                          if k.startswith("raw/")), b"server error")
+                                          if k.endswith("/raw.bin")), b"server error")
                     skipped = self.invoke()
                     self.assertEqual(skipped["status"], "skipped")
                     self.assertTrue(skipped["reason"].startswith(reason))
@@ -527,7 +532,7 @@ class GuardedHandlerTests(unittest.TestCase):
         self.now += timedelta(seconds=60)
         self.collect.side_effect = None
         self.collect.return_value = normalize(RAW, self.now)
-        self.assertEqual(self.invoke()["status"], "observed")
+        self.assertEqual(self.invoke()["status"], "success")
 
     def test_interrupted_execution_leaves_lease_and_later_halts(self):
         self.collect.side_effect = KeyboardInterrupt()
@@ -540,7 +545,7 @@ class GuardedHandlerTests(unittest.TestCase):
         self.assertEqual(self.evidence(), {})
 
     def test_partial_evidence_failure_preserves_raw_and_does_not_release(self):
-        self.s3.before_put = lambda p: (_ for _ in ()).throw(OSError("storage failed")) if p["Key"].startswith("normalized/") else None
+        self.s3.before_put = lambda p: (_ for _ in ()).throw(OSError("storage failed")) if p["Key"].endswith("/attempt.json") else None
         with self.assertRaises(PersistenceError):
             self.invoke()
         self.assertEqual(len(self.evidence()), 1)
@@ -564,7 +569,7 @@ class GuardedHandlerTests(unittest.TestCase):
 
     def test_halt_survives_evidence_storage_failure(self):
         self.collect.return_value = CollectionResult("collection_failed", NOW, b"restricted", http_status=403)
-        self.s3.before_put = lambda p: (_ for _ in ()).throw(OSError("storage failed")) if p["Key"].startswith("raw/") else None
+        self.s3.before_put = lambda p: (_ for _ in ()).throw(OSError("storage failed")) if p["Key"].endswith("/raw.bin") else None
         with self.assertRaises(PersistenceError):
             self.invoke()
         self.assertTrue(self.invoke()["reason"].startswith("halted: HTTP 403"))

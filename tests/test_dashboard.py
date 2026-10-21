@@ -14,6 +14,8 @@ from zipfile import ZipFile
 
 import dashboard_publisher as publisher
 from tools import package_dashboard
+from tornredeye.evidence_paths import LINEAGE, evidence_keys
+from uuid import UUID
 
 ROOT = Path(__file__).resolve().parents[1]
 NOW = datetime(2026, 10, 10, 12, 30, tzinfo=timezone.utc)
@@ -32,7 +34,7 @@ def clients():
 
 
 def observed_record(**changes):
-    record = {"schema_version": 1, "collection_id": ID, "status": "observed",
+    record = {"schema_version": 1, "collection_id": ID, "format": "stock-evidence", "lineage": LINEAGE, "acquisition": {"status": "success"}, "validation_status": "complete",
               "retrieved_at": "2026-10-10T12:20:00Z", "source_timestamp": int(NOW.timestamp()) - 3600,
               "export_timestamp": None, "raw_evidence": {"bucket": "secret", "key": "secret"},
               "detail": "private exception", "credentials": "secret"}
@@ -48,6 +50,17 @@ def s3_error(code, status):
 
 
 class PublisherTests(unittest.TestCase):
+    def test_neutral_logged_key_uses_legacy_status_without_exposing_all_stock(self):
+        c = clients()
+        key = evidence_keys(NOW, UUID(hex=ID))[1]
+        c["logs"].filter_log_events.return_value = {"events": [{"timestamp": int(NOW.timestamp()*1000),
+            "message": f"persisted collection_id={ID} acquisition_status=success normalized_key={key}"}]}
+        c["s3"].get_object.return_value = observed_record(stock_export={"countries": {"private": "value"}})
+        snapshot = publisher.build_snapshot(c, CONFIG, NOW)
+        self.assertEqual(c["s3"].get_object.call_args.kwargs["Key"], key)
+        self.assertEqual(snapshot["freshness"]["state"], "available")
+        self.assertNotIn("stock_export", json.dumps(snapshot))
+
     def test_missing_is_not_zero_and_success_is_not_complete_coverage(self):
         c = clients()
         c["cloudwatch"].get_metric_statistics.return_value = {"Datapoints": [{"Timestamp": NOW.replace(minute=0) - timedelta(hours=1), "Sum": 0}]}
@@ -75,30 +88,30 @@ class PublisherTests(unittest.TestCase):
     def test_selected_evidence_only_timestamps_allowlisted(self):
         c = clients()
         c["logs"].filter_log_events.side_effect = [
-            {"events": [{"message": f"persisted collection_id={ID} status=observed raw_key=secret"}]}, {"events": []}]
+            {"events": [{"message": f"persisted collection_id={ID} acquisition_status=success raw_key=secret normalized_key={evidence_keys(NOW, UUID(hex=ID))[1]}"}]}, {"events": []}]
         c["s3"].get_object.return_value = observed_record()
         s = publisher.build_snapshot(c, CONFIG, NOW)
         self.assertEqual(s["freshness"]["retrieved_at_utc"], "2026-10-10T12:20:00Z")
         self.assertIsNone(s["freshness"]["export_timestamp_utc"])
-        self.assertEqual(c["s3"].get_object.call_args.kwargs["Key"], f"normalized/yata/jap/206/{ID}.json")
+        self.assertEqual(c["s3"].get_object.call_args.kwargs["Key"], evidence_keys(NOW, UUID(hex=ID))[1])
         for text in (ID, "secret", "private exception", "credentials", "raw_key"):
             self.assertNotIn(text, json.dumps(s))
         self.assertFalse(c["s3"].list_objects_v2.called)
         self.assertFalse(c["s3"].put_object.called)
 
     def test_evidence_invalid_mismatched_or_oversized_is_unavailable(self):
-        for response in (observed_record(collection_id="different"), observed_record(status="missing"),
+        for response in (observed_record(collection_id="different"), observed_record(validation_status="malformed"),
                          observed_record(retrieved_at="future or secret"), {"Body": io.BytesIO(b"x" * (publisher.RECORD_BYTES + 1))}):
             with self.subTest(response=response):
                 c = clients()
-                c["logs"].filter_log_events.return_value = {"events": [{"message": f"persisted collection_id={ID} status=observed"}]}
+                c["logs"].filter_log_events.return_value = {"events": [{"message": f"persisted collection_id={ID} acquisition_status=success normalized_key={evidence_keys(NOW, UUID(hex=ID))[1]}"}]}
                 c["s3"].get_object.return_value = response
                 self.assertEqual(publisher.build_snapshot(c, CONFIG, NOW)["freshness"]["state"], "unavailable")
                 self.assertTrue(response["Body"].closed)
 
     def test_query_windows_pages_events_reads_and_data_size_bounded(self):
         c = clients()
-        events = [{"message": f"persisted collection_id={i:032x} status=observed", "timestamp": i} for i in range(100)]
+        events = [{"message": f"persisted collection_id={i:032x} acquisition_status=success normalized_key={evidence_keys(NOW, UUID(int=i))[1]}", "timestamp": i} for i in range(100)]
         c["logs"].filter_log_events.return_value = {"events": events, "nextToken": "repeat"}
         c["s3"].get_object.side_effect = Exception("unavailable")
         s = publisher.build_snapshot(c, CONFIG, NOW)
@@ -349,7 +362,7 @@ class DashboardInfrastructureTests(unittest.TestCase):
         self.assertNotIn("control/", json.dumps(statements))
         reads = [s for s in statements if "s3:GetObject" in s["Action"]]
         self.assertEqual(len(reads), 2)
-        self.assertIn("/normalized/yata/jap/206/*", reads[0]["Resource"]["Fn::Sub"])
+        self.assertIn("/evidence/live-v1/*/attempt.json", reads[0]["Resource"][0]["Fn::Sub"])
         types = {r["Type"] for r in self.resources.values()}
         self.assertNotIn("AWS::CloudWatch::Alarm", types)
         self.assertNotIn("AWS::Logs::MetricFilter", types)
@@ -370,7 +383,7 @@ class DashboardInfrastructureTests(unittest.TestCase):
             path = Path(directory) / "publisher.zip"
             package_dashboard.package(path)
             with ZipFile(path) as archive:
-                self.assertEqual(archive.namelist(), ["dashboard_publisher.py"])
+                self.assertEqual(archive.namelist(), ["dashboard_publisher.py", "tornredeye/__init__.py", "tornredeye/evidence_paths.py"])
                 self.assertIsNone(archive.testzip())
                 self.assertEqual(archive.read("dashboard_publisher.py"), (ROOT / "dashboard_publisher.py").read_bytes())
             original = path.read_bytes(); package_dashboard.package(path)

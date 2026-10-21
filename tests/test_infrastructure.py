@@ -43,6 +43,7 @@ class InfrastructureTests(unittest.TestCase):
 
     def test_iam_matches_actual_persistence_calls_and_evidence_has_no_expiration(self):
         s3 = Mock()
+        s3.list_objects_v2.return_value = {"IsTruncated": False, "Contents": []}
         raw = b'{"timestamp":1,"stocks":{"jap":{"update":1,"stocks":[{"id":206,"name":"Xanax","quantity":0,"cost":800000}]}}}'
         result = normalize(raw, datetime(2026, 10, 8, tzinfo=timezone.utc))
         persist(result, s3=s3, bucket="test-evidence", collection_id=UUID(int=1))
@@ -59,7 +60,7 @@ class InfrastructureTests(unittest.TestCase):
                     self.assertFalse(any(fnmatch.fnmatchcase(unrelated_key, pattern) for pattern in patterns))
         self.assertNotIn("LifecycleConfiguration", properties("EvidenceBucket"))
         actions = {action for statement in statements for action in statement["Action"]}
-        self.assertEqual(actions, {"s3:PutObject", "s3:GetObject", "logs:CreateLogStream", "logs:PutLogEvents"})
+        self.assertEqual(actions, {"s3:PutObject", "s3:GetObject", "s3:ListBucket", "logs:CreateLogStream", "logs:PutLogEvents"})
         self.assertTrue(all(statement["Effect"] == "Allow" for statement in statements))
 
     def test_control_permissions_are_conditional_and_scoped_to_exact_key(self):
@@ -134,7 +135,7 @@ class InfrastructureTests(unittest.TestCase):
 class MonitoringTests(unittest.TestCase):
     def test_metrics_reuse_logs_without_dimensions_or_s3_request_monitoring(self):
         expected = {
-            "PersistedObservationFilter": ('"persisted" "status=observed"', "PersistedObservations"),
+            "PersistedObservationFilter": ('"persisted" "acquisition_status=success" -"usable_observations=0"', "PersistedObservations"),
             "PollingHaltFilter": ('"collection skipped" "reason=halted:"', "PollingHalts"),
         }
         filters = {name for name, resource in RESOURCES.items()
@@ -249,6 +250,7 @@ class PackageTests(unittest.TestCase):
             with ZipFile(destination) as archive:
                 self.assertEqual(set(archive.namelist()), {
                     "lambda_function.py", "s3_persistence.py", "yata_collector.py", "polling_guard.py",
+                    "tornredeye/__init__.py", "tornredeye/normalization.py", "tornredeye/evidence_paths.py",
                 })
                 self.assertIsNone(archive.testzip())
                 for name in archive.namelist():

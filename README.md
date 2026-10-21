@@ -1,164 +1,125 @@
 # TornRedeye
 
-Torn is an online browser-based game with overseas shops where players buy items.
-TornRedeye tracks foreign stock availability in those shops to learn when they
-restock and how quickly their stock sells out. The operational AWS collector
-normalizes one stock listing in Japan and retains complete YATA travel exports
-for offline analysis across countries and items.
-
-The long-term goal is adaptive probabilistic forecasts for all supported
-country/item combinations, using shared methods and updating as new observations
-arrive, including predictions multiple replenishment cycles ahead. Hawaii Shark
-Fin is the initial research and validation case for this broader scope.
-Statistical forecasting would come first, accounting for stock depletion,
-replenishment patterns, time-dependent demand, source freshness, gaps and
-uncertainty. Machine learning remains a potential later improvement, evaluated
-against historical backtesting results. These adaptive forecasting capabilities and
-automatic forecast updates are planned, not implemented.
-
-## Delivery roadmap
-
-TornRedeye advances toward useful, evidence-backed stock availability forecasts through delivery milestones, not fixed dates or arbitrary sample-size thresholds. Hawaii Shark Fin is the initial research case, not a permanent architectural boundary. Existing data collection and backup continue throughout.
-
-1. **Evidence foundation.** Collect, preserve, verify, and prepare historical stock observations. **Exit:** Traceable evidence and reusable stock-history processing are available.
-
-2. **Forecasting target selection.** Determine which outcomes the observations can credibly predict, including limitations of inferred replenishment events. **Exit:** A defined prediction target, forecast horizons, and a defensible evaluation approach.
-
-3. **Offline forecasting baseline.** Produce initial probabilistic forecasts for Hawaii Shark Fin and compare them against feasible simple alternatives. **Exit:** Reproducible predictions, historical evaluation, and clearly reported uncertainty. Production accuracy is not assumed.
-
-4. **Forward validation.** Evaluate a selected approach against subsequently collected observations that did not inform its selection. Examine forecast reliability, calibration, and performance against simple baselines. **Exit:** Evidence supporting practical usefulness, or a documented reason to revise the target or method.
-
-5. **Useful forecasting MVP.** Make sufficiently supported forecasts available through the existing reporting system, including probability, horizon, evidence freshness, and uncertainty. **Exit:** Users can interpret predictions to inform stock-purchasing or travel decisions, with insufficient-evidence outcomes where necessary.
-
-6. **Generalization and improvement.** Extend shared forecasting methods across supported country/item pairs and multiple future replenishment cycles. Introduce more sophisticated methods only when justified by evidence. **Exit:** Broader coverage with measured reliability, without separate hardcoded forecasting systems for individual items.
-
-### Progression principles
-
-- Substantive research should resolve a decision affecting the next deliverable. Do not repeatedly analyze the same exploratory sample without a consequential question.
-- Build and measure simple baselines early. Distinguish exploratory historical findings from independently validated forecasting performance.
-- Advance based on demonstrated milestone outcomes, not calendar age or raw observation counts. New evidence may justify revisiting earlier decisions.
-- Prioritize reusable country/item forecasting capabilities over special-purpose solutions or speculative infrastructure.
-- Preserve uncertainty and explicitly report insufficient evidence. Never present inferred events or unvalidated forecasts as established facts.
-- Treat milestones as product direction, not a backlog of issues to open in advance. Active GitHub issues define bounded work packages.
+TornRedeye explores foreign-market stock observations in Torn, an online game.
+It preserves overseas shop evidence to study availability, restock intervals and
+sellout patterns, with probabilistic forecasting as an experimental capability.
+YATA (yata.yt) is the external, third-party API source used to retrieve Torn
+overseas shop stock data through its travel export endpoint. YATA supplies
+observations; TornRedeye independently collects, preserves and analyzes that
+evidence and develops experimental forecasts. Missing or stale reports never
+imply observed zero stock.
 
 ## How it works
 
-The collector saves original responses and processed records in S3, building a
-history of foreign stock availability. Monitoring follows collection health,
-while scheduled backups keep an independently verified copy in Azure. A public
-three-page dashboard reports operations, diagnostics and infrastructure usage.
-Local tools normalize complete exports and analyze observed stock history.
+TornRedeye collects stock observations into private evidence storage, with
+independent monitoring, backup, reporting and experimental forecasting components.
+The diagram shows implemented software components and their data flows; it does
+not indicate which production schedules are currently enabled. Deployment and
+operation are described in the [deployment guide](docs/deployment.md).
 
 ```mermaid
 flowchart TD
-    schedule["EventBridge Scheduler"] --> collector["Lambda collector: live"]
-    source["YATA: overseas shop availability"] --> collector
-    collector --> history["S3: raw and processed records"]
-    collector --> monitoring["CloudWatch logs and alarms"]
+    schedule["EventBridge Scheduler: one-minute attempts"] --> collector["Guarded Lambda collector"]
+    source["YATA travel export API"] --> collector
+    collector <--> control["Private S3: shared polling-control state"]
+    collector --> history["Private S3: raw and canonical all-country stock evidence"]
+    collector --> monitoring["CloudWatch logs, metrics and alarms"]
     monitoring --> notifications["SNS notifications"]
-    history --> backup["GitHub Actions: daily backups"]
+    history --> backup["GitHub Actions: daily verified backup"]
     backup --> azure["Azure Blob Storage"]
-    history --> publisher["Hourly snapshot publisher"]
-    publisher --> dashboard["Public three-page operations dashboard"]
-    local["Selected local evidence"] --> analysis["Offline normalization and stock history"]
-    analysis -.-> forecasting["Forecasting: planned"]
+    history --> publisher["Hourly Lambda snapshot publisher"]
+    monitoring --> publisher
+    publisher --> dashboard["CloudFront: public operations dashboard"]
+    history --> shadow["Independent private Hawaii Shark Fin shadow consumer"]
+    shadow --> forecasts["Private S3: immutable forecasts and outcomes"]
+    forecasts --> backup
+    local["Selected local evidence"] --> analysis["Offline normalization, history and baseline analysis"]
 ```
 
-Solid arrows show implemented paths; the dotted branch is planned forecasting.
+Shared Python normalization processes every returned country and item. The
+independent shadow consumer reads retained evidence without making YATA requests; its experimental
+60-minute forecasts remain private and are not available to players. The public
+dashboard reports operations, not forecasts. Backup scope includes raw/canonical
+stock evidence and immutable forecast, acknowledgement, outcome and checkpoint
+records; mutable forecast state and polling control are excluded. Local historical
+analysis is a separate offline capability.
+
+The polling guard prevents overlapping requests, enforces minimum spacing and
+honors `Retry-After` cooldowns; restrictions or uncertain attempts stop collection
+for operator review. Evidence retains original bytes, timestamps and provenance,
+with canonical records linking available raw bytes by key and SHA-256 hash.
+Conditional writes prevent overwrites; conflicts and partial failures remain
+visible. Monitoring distinguishes persisted acquisitions from HTTP success, and
+backups verify uploaded archives and payload hashes by reading them back.
 
 ## Technology stack
 
 | Technology | Responsibility |
 | --- | --- |
-| Python | Collect and validate API responses, store records, and verify backups. |
-| AWS EventBridge Scheduler and Lambda | Trigger and run the collector without maintaining a server. |
-| Amazon S3 | Hold the primary evidence history and shared polling-control state. |
-| CloudWatch and SNS | Turn logs and metrics into alarms and route configured notifications. |
-| GitHub Actions | Run the backup workflow with short-lived cloud access through OIDC authentication. |
-| Azure Blob Storage | Keep the independent backup, including archives and integrity manifests. |
+| YATA travel export API | Supply third-party observations of Torn overseas shop stock. |
+| Python | Collect and normalize observations, preserve evidence, run offline analysis and private shadow forecasting, and verify backups. |
+| AWS EventBridge Scheduler and Lambda | Schedule guarded collection and run serverless collector, publisher and independent forecast functions. |
+| Amazon S3 | Keep private raw/canonical stock evidence, polling-control state and forecast records/state; separately store dashboard assets and snapshots. |
+| CloudWatch and SNS | Monitor collection through logs, metrics and alarms, and route notifications to configured, confirmed subscriptions. |
+| GitHub Actions | Run verified daily backups with short-lived AWS/Azure access through OpenID Connect (OIDC). |
+| Azure Blob Storage | Keep independent evidence and immutable forecast backups, including archives and integrity records. |
+| Amazon CloudFront | Deliver the public operations dashboard over HTTPS from a private S3 origin. |
+| AWS SAM / CloudFormation | Define cloud resources and permissions as reviewable templates; deployment and schedule activation remain separate actions. |
 
-AWS SAM/CloudFormation templates define the collector, storage and monitoring
-resources, so their configuration is reviewed alongside the code.
+## Capabilities and limitations
 
-## Engineering highlights
+- **Implemented operational foundation:** guarded collection, immutable evidence
+  writes, integrity-checked incremental backups and an operations dashboard.
+- **Implemented shared processing:** deterministic all-country/item normalization,
+  field diagnostics and reusable local history analysis. Time-partitioned evidence
+  supports bounded prospective reads and independently verified Azure recovery.
+  Historical evidence retains its original bytes and provenance separately from
+  the operational lineage; operational readers do not rewrite it or use historical
+  labels to train current forecasts.
+- **Experimental forecasting:** offline empirical/persistence comparison and a
+  private 60-minute Hawaii Shark Fin shadow consumer. Its AWS definition defaults
+  to disabled. Predictions are not validated purchasing or travel advice.
+- **Planned product capabilities:** broader stock intelligence, historical trends,
+  forecasting and travel support are described in the [roadmap](docs/roadmap.md).
+  They are not implementation commitments.
 
-- **Scheduled collection with safeguards.** A one-minute schedule starts
-  collection attempts. A shared polling guard prevents overlapping requests,
-  enforces minimum spacing and honors `Retry-After` cooldowns. Access restrictions
-  or abandoned attempts stop collection for operator review.
+## Getting started
 
-- **Evidence that remains traceable.** Original response bytes and normalized
-  JSON records use separate S3 prefixes. UTC retrieval times, available source
-  timestamps and provenance details preserve where each result came from.
-  Processed records link to available raw evidence through its key and SHA-256
-  hash. Missing information is recorded rather than treated as no stock available.
-
-- **Safe retries and visible failures.** Conditional S3 writes make retrying the
-  same collection idempotent: matching data is accepted and missing writes can
-  finish without overwriting existing records. Conflicts and partial failures
-  are reported. Each new retrieval gets its own identity, even when YATA returns
-  cached data; repeated observations are not silently discarded.
-
-- **Monitoring tied to saved observations.** CloudWatch alarms detect gaps in
-  successfully persisted observations, repeated Lambda errors and polling halts.
-  An HTTP success alone does not count as a saved observation. SNS provides the
-  notification route; delivery depends on the configured, confirmed subscription.
-
-- **Incremental backups with integrity checks.** The AWS-to-Azure runner
-  transfers new or detectably changed evidence. It reads uploaded archives back
-  and verifies SHA-256 hashes, payloads and metadata before recording completion.
-  Recovery checks cover the historical baseline plus increments, retaining
-  original bytes and provenance. Manual backup and recovery verification have
-  completed.
-
-- **Practical resource limits.** Compact coverage manifests avoid repeatedly
-  downloading historical payloads. Limits on requests, running time and temporary storage help prevent backup jobs from using excessive resources. The collector uses 128 MiB of Lambda memory
-  and 14-day log retention; monitoring avoids paid detailed S3 request metrics.
-  Actual costs still depend on stored data and cloud usage.
-
-## Current progress
-
-The AWS collection system is operational. The independent Azure backup's
-[first unattended scheduled run was verified on October 14, 2026](https://github.com/epmelito/TornRedeye/issues/23#issuecomment-6173917639),
-with subsequent successful scheduled runs through
-[October 18, 2026](https://github.com/epmelito/TornRedeye/actions/runs/39110394657).
-
-The public dashboard is deployed with Operations, Diagnostics, and
-Infrastructure & Usage pages. Hourly scheduled publication was
-[verified on October 15, 2026](https://github.com/epmelito/TornRedeye/issues/10#issuecomment-6198958432).
-
-Offline all-stock normalization and
-[reusable local stock-history analysis](https://github.com/epmelito/TornRedeye/pull/35)
-are implemented. An [offline availability baseline](docs/availability-forecast.md)
-compares an expanding empirical probability with last observed state persistence
-at a 60 minute horizon. It supports local historical experimentation; production
-forecasts and exact restock predictions remain unimplemented. A separate
-[private shadow forecasting consumer](docs/shadow-forecast.md) reuses the offline
-accounting core and existing S3 evidence. Its independent AWS definition defaults
-to disabled; deployment and activation require separate authorization.
-
-## Running locally
-
-Use Python 3.11 or newer. From the repository root, run the offline Python tests:
+Use Python 3.11 or newer, from the repository root:
 
 ```sh
 python -B -m unittest discover -s tests
+python -B -m tornredeye.stock_history --help
+python -B -m tornredeye.availability_forecast --help
 ```
 
-No cloud credentials are needed; the suite uses synthetic data and fake cloud
-clients. See the links below for deployment and operating instructions.
+Tests use synthetic evidence and fake cloud clients; no cloud credentials are
+needed. Local analysis requires an explicitly selected private evidence subset.
+Deployment and any live source/storage access are separate operating actions.
 
-The separate [offline all-stock normalizer](docs/stock-normalization.md) can
-process every returned country and item from retained YATA export bytes. It
-preserves raw evidence identity and timestamps and reports partial validation
-without changing the live Japan collector or writing new evidence.
+## Repository layout
 
-## Further information
+```text
+tornredeye/    Shared normalization, stock history and experimental accounting
+tools/         Lambda package builders and daily backup wrapper
+tests/         Deterministic tests and fixtures
+docs/          Contracts, operation instructions and product roadmap
+dashboard/     Existing static operations dashboard
+```
 
+Operational Lambda entry points, their supporting collector/backup modules and
+AWS templates remain at the root to preserve deployed handlers and operating
+commands. Package builders include the shared package where required. No package
+installation or additional framework is required.
+
+## Documentation
+
+- [Shared stock normalization and integration boundary](docs/stock-normalization.md)
+- [Local stock history](docs/stock-history.md)
+- [Offline availability baseline](docs/availability-forecast.md)
+- [Private shadow forecasting](docs/shadow-forecast.md)
 - [Deployment and operation](docs/deployment.md)
-- [Monitoring, alerts and resource use](docs/monitoring.md)
-- [Backups, verification and recovery](docs/evidence-backup.md)
+- [Monitoring and resource use](docs/monitoring.md)
+- [Backup, verification and recovery](docs/evidence-backup.md)
 - [Public operations dashboard](docs/dashboard.md)
-- [Offline all-stock normalization](docs/stock-normalization.md)
-- [Local stock history (Hawaii Shark Fin example)](docs/stock-history.md)
-- [Offline availability forecasting baseline](docs/availability-forecast.md)
+- [Long-term product roadmap](docs/roadmap.md)

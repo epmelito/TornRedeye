@@ -16,7 +16,7 @@ CONFIG = {
     'BACKUP_AWS_REGION': r'[a-z0-9-]+',
     'BACKUP_AZURE_ACCOUNT': r'[a-z0-9]{3,24}',
     'BACKUP_AZURE_CONTAINER': r'[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])',
-    'BACKUP_BASELINE_CATALOG_SHA256': r'[0-9a-f]{64}',
+    'BACKUP_ANCHOR_SHA256': r'[0-9a-f]{64}',
 }
 
 
@@ -73,7 +73,7 @@ def main():
                 '--region', config['BACKUP_AWS_REGION'],
                 '--azure-account', config['BACKUP_AZURE_ACCOUNT'],
                 '--azure-container', config['BACKUP_AZURE_CONTAINER'],
-                '--baseline-catalog-sha256', config['BACKUP_BASELINE_CATALOG_SHA256'],
+                '--anchor-sha256', config['BACKUP_ANCHOR_SHA256'],
                 '--scratch-parent', str(scratch), '--max-seconds', '3300', '--live-access-approved']
             # provider diagnostics and runner manifests never enter the Actions log
             with tempfile.TemporaryFile(dir=scratch) as output, tempfile.TemporaryFile(dir=scratch) as errors:
