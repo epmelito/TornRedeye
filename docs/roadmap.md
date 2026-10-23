@@ -41,6 +41,9 @@ over time. Do not impose a universal restock duration, prediction horizon or
 forecast update frequency. Future outputs should support uncertain replenishment
 windows and availability at user-requested times, including travel arrival, where
 the evidence supports those targets.
+Player location or travel status affects the requested time, not the underlying
+forecasting approach: players traveling and players already abroad share the same
+country/item replenishment and depletion estimates.
 
 Progress toward near-real-time processing and forecast updates within YATA's
 known, accepted user-reported source latency. This is a product goal, not a

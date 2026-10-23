@@ -87,6 +87,104 @@ def _row(root, member, country, item_id):
     return row
 
 
+def _stock_cycles(rows, *, unplaced):
+    """Summarize existing comparisons without identifying latent game events."""
+    candidates, intervals, runs = [], [], []
+    counts = Counter(increase=0, decrease=0, unchanged=0)
+    issues = Counter(issue for row in rows for issue in row["issues"])
+    usable = [row for row in rows if not row["issues"]]
+    ages = [row["source_age_seconds"] for row in usable]
+    spacing = [row["elapsed_retrieval_seconds"] for row in rows
+               if row["elapsed_retrieval_seconds"] is not None]
+    last_appearance = None
+    run = None
+    left_boundary = "subset_start"
+    for row in rows:
+        if unplaced or row["issues"]:
+            if run is not None:
+                run["right_boundary"] = "quality_barrier"
+                runs.append(run)
+                run = None
+            last_appearance = None
+            left_boundary = "quality_barrier"
+            continue
+        comparison = row["comparison"]
+        candidate = None
+        if comparison is not None:
+            counts[comparison["kind"]] += 1
+            previous_quantity = row["quantity"] - comparison["quantity_change"]
+            if comparison["zero_to_positive"] or previous_quantity > 0 and row["quantity"] == 0:
+                candidate = {
+                    "kind": "zero_to_positive" if comparison["zero_to_positive"] else "positive_to_zero",
+                    "from_receipt": comparison["from_receipt"], "to_receipt": row["receipt"],
+                    "quantity_change": comparison["quantity_change"],
+                    "source_update_interval": comparison["source_update_interval"],
+                    "retrieval_interval_utc": comparison["retrieval_interval_utc"],
+                }
+                candidates.append(candidate)
+                if candidate["kind"] == "zero_to_positive":
+                    if last_appearance is not None:
+                        a, b = last_appearance["source_update_interval"]
+                        c, d = candidate["source_update_interval"]
+                        intervals.append({
+                            "from_candidate_receipt": last_appearance["to_receipt"],
+                            "to_candidate_receipt": candidate["to_receipt"],
+                            "source_change_separation_bounds_seconds": [max(0, c - b), d - a],
+                            "appearance_report_separation_seconds": d - b,
+                        })
+                    last_appearance = candidate
+        if row["quantity"] > 0:
+            if run is None:
+                run = {
+                    "first_receipt": row["receipt"], "last_receipt": row["receipt"],
+                    "source_update_interval": [row["source_timestamp"], row["source_timestamp"]],
+                    "retrieval_interval_utc": [row["retrieved_at"], row["retrieved_at"]],
+                    "source_span_seconds": 0, "distinct_source_reports": 1,
+                    "cached_receipts": 0, "first_quantity": row["quantity"],
+                    "last_quantity": row["quantity"], "net_increase_units": 0,
+                    "net_decrease_units": 0, "unchanged_comparisons": 0,
+                    "opening_candidate_receipt": row["receipt"] if candidate else None,
+                    "closing_candidate_receipt": None,
+                    "left_boundary": "zero_to_positive_candidate" if candidate else left_boundary,
+                    "right_boundary": "subset_end",
+                }
+            else:
+                run["distinct_source_reports"] += int(comparison is not None)
+                if comparison is not None:
+                    delta = comparison["quantity_change"]
+                    run["net_increase_units"] += max(delta, 0)
+                    run["net_decrease_units"] += max(-delta, 0)
+                    run["unchanged_comparisons"] += int(delta == 0)
+            run["cached_receipts"] += int(row["repeated_source_observation"])
+            run["last_receipt"] = row["receipt"]
+            run["last_quantity"] = row["quantity"]
+            run["source_update_interval"][1] = row["source_timestamp"]
+            run["retrieval_interval_utc"][1] = row["retrieved_at"]
+            run["source_span_seconds"] = row["source_timestamp"] - run["source_update_interval"][0]
+        elif run is not None:
+            run["closing_candidate_receipt"] = row["receipt"]
+            run["right_boundary"] = "positive_to_zero_candidate"
+            runs.append(run)
+            run = None
+        left_boundary = "quality_barrier"
+    if run is not None:
+        runs.append(run)
+    return {
+        "status": "snapshot_comparisons_only" if sum(counts.values()) else "insufficient_evidence_for_transitions",
+        "interpretation": "Source-report candidates, not confirmed restocks, sellouts or continuous stock lifetimes. Coverage between snapshots is unknown; sellbacks and missed events remain possible.",
+        "observations": len(rows), "usable_observations": len(usable),
+        "cached_receipts": sum(bool(row.get("repeated_source_observation")) for row in rows),
+        "issue_counts": dict(sorted(issues.items())),
+        "source_age_seconds": {"min": min(ages) if ages else None, "max": max(ages) if ages else None},
+        "max_retrieval_spacing_seconds": max(spacing) if spacing else None,
+        "comparison_counts": dict(counts),
+        "candidate_counts": {kind: sum(candidate["kind"] == kind for candidate in candidates)
+                             for kind in ("zero_to_positive", "positive_to_zero")},
+        "candidates": candidates, "appearance_intervals": intervals,
+        "positive_report_runs": runs,
+    }
+
+
 def analyze(directory, *, country: str, item_id: int):
     """Analyze only the supplied local subset; never modify or fetch evidence."""
     if not isinstance(country, str) or not country.strip():
@@ -159,6 +257,7 @@ def analyze(directory, *, country: str, item_id: int):
         "interpretation": "Reported snapshot comparisons, not exact restock or sellout times. Cached retrieval intervals do not bound actual stock events.",
         "warnings": ["Unplaced evidence prevents all transition comparisons."] if unplaced else [],
         "observations": rows,
+        "stock_cycles": _stock_cycles(rows, unplaced=unplaced),
     }
 
 

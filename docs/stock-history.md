@@ -78,6 +78,73 @@ collection attempts. Reuse requires original retrieval metadata, not file mtime,
 S3 LastModified or processing time. The tool reuses `tornredeye/normalization.py`; it does
 not alter the collector, normalizer, persistence, backup or dashboard contracts.
 
+## Observed stock-cycle summaries
+
+The same command also returns `stock_cycles`, derived from the existing validated
+observations and adjacent comparisons. No second evidence pipeline, freshness
+threshold, assumed polling coverage or item-specific timing rule is used.
+
+- `comparison_counts` counts increases, decreases and unchanged quantities only
+  when the existing comparison is eligible. `candidates` selects zero-to-positive
+  and positive-to-zero changes, retaining both receipt references, the net quantity
+  change, source-update interval and retrieval interval. `candidate_counts` counts
+  these observed transitions, **not actual restocks or sellouts**. An increase
+  between positive reports remains ambiguous, not a replenishment event.
+- `appearance_intervals` links consecutive zero-to-positive candidates only within
+  an uninterrupted sequence of usable rows. For source-update brackets `(a, b]`
+  and `(c, d]`, `source_change_separation_bounds_seconds` is `[max(0, c-b), d-a]`;
+  `appearance_report_separation_seconds` is `d-b`. These describe the separation
+  of candidate source-report changes, conditional on those brackets. They are not
+  measured game-event intervals, independent cycle samples or a restock distribution.
+  Cached receipts cannot narrow the source brackets. Unknown coverage and hidden
+  events remain possible even without an explicit invalid row.
+- `positive_report_runs` groups consecutive usable positive reports. Each run
+  retains its first/last receipt, source and retrieval endpoints, first/last quantity,
+  distinct source-report count, cached-receipt count and `source_span_seconds`.
+  The latter measures the span of observed positive source reports, **not a lower
+  bound on continuous availability or a stock lifetime**. Cached receipts extend
+  the retrieval endpoint but not the source span or distinct source-report count.
+  Opening/closing candidate receipt references identify observed boundary changes;
+  `subset_start`, `subset_end` and `quality_barrier` boundaries mark incomplete
+  windows rather than inventing missing appearances or disappearances.
+- Within a positive run, `net_increase_units` and `net_decrease_units` sum the
+  positive and negative adjacent net changes separately; `unchanged_comparisons`
+  counts advancing-source reports with unchanged quantity. Opening/closing changes
+  are in the referenced candidates, not these within-run totals. These summaries
+  describe reported depletion and additions, not sales volumes, consumption rates
+  or confirmed replenishment amounts. Simultaneous purchases and sellbacks can
+  cancel in a net change; an unchanged report does not prove inactivity.
+- `issue_counts`, usable-observation and cached-receipt counts, the usable-source
+  age range and maximum retrieval spacing summarize evidence quality. Cached and
+  issue counts can overlap. Every sampling interval has unknown coverage; no
+  threshold silently turns a long interval into a complete observation window.
+  Invalid/missing rows break runs and candidate links. Unplaced evidence suppresses
+  all such linkage. With no eligible comparisons, status is
+  `insufficient_evidence_for_transitions`; otherwise it is `snapshot_comparisons_only`.
+  A bodyless collection attempt cannot be discovered in this selected raw subset;
+  absence of a row is not proof that collection or stock availability was continuous.
+
+Source-update brackets express changes between reported source states. Retrieval
+times describe when TornRedeye obtained them, not when a player could buy stock;
+source age is retained without an invented cutoff. Existing source conflicts are
+flagged across the supplied history retrospectively. This descriptive report is
+not an as-of forecasting decision replay and must not supply future-known flags
+to a historical forecast. Short-lived events, multiple changes between snapshots,
+sellbacks, source latency and missing evidence limit interpretation. The
+[Torn travel reference](https://wiki.torn.com/wiki/Travel) documents that players
+can bring items abroad and sell them; quantity increases alone cannot identify
+their cause.
+
+Hawaii Shark Fin (`--country haw --item-id 1485`) and Japan Xanax
+(`--country jap --item-id 206`) use the same analysis. Run both against the same
+explicitly selected, verified export subset and retain its identities, endpoints,
+quality diagnostics and private JSON outputs to reproduce a comparison. One day
+cannot establish a reliable long-term replenishment distribution. The October 21,
+2026 Traveling 2.0 changes are possible context for changing purchasing/depletion
+patterns, not evidence of causation. No regime-change model or forecasting method
+is fitted here. Evaluate any later timing/depletion method on subsequently
+available evidence with unresolved outcomes left explicit.
+
 ## Offline checks
 
 ```text
