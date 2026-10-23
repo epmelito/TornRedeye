@@ -248,6 +248,125 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(row["comparison"]["kind"], "decrease")
         self.assertIn("coverage between observations is unknown", history.analyze(self.root, country="haw", item_id=1485)["scope"])
 
+    def test_cycle_candidates_separations_and_net_changes_are_not_restock_counts(self):
+        for minute, quantity in enumerate((0, 10, 15, 15, 7, 0, 8, 0)):
+            self.add(minute, quantity)
+        report = history.analyze(self.root, country="haw", item_id=1485)
+        cycles = report["stock_cycles"]
+        self.assertEqual(cycles["status"], "snapshot_comparisons_only")
+        self.assertEqual(cycles["comparison_counts"], {"increase": 3, "decrease": 3, "unchanged": 1})
+        self.assertEqual(cycles["candidate_counts"], {"zero_to_positive": 2, "positive_to_zero": 2})
+        candidates = cycles["candidates"]
+        self.assertEqual([c["kind"] for c in candidates],
+                         ["zero_to_positive", "positive_to_zero"] * 2)
+        self.assertEqual(candidates[1]["quantity_change"], -7)
+        self.assertEqual(candidates[0]["from_receipt"], report["observations"][0]["receipt"])
+        interval, = cycles["appearance_intervals"]
+        self.assertEqual(interval["source_change_separation_bounds_seconds"], [240, 360])
+        self.assertEqual(interval["appearance_report_separation_seconds"], 300)
+        first, second = cycles["positive_report_runs"]
+        self.assertEqual(first["distinct_source_reports"], 4)
+        self.assertEqual(first["source_span_seconds"], 180)
+        self.assertEqual((first["net_increase_units"], first["net_decrease_units"],
+                          first["unchanged_comparisons"]), (5, 8, 1))
+        self.assertEqual(first["left_boundary"], "zero_to_positive_candidate")
+        self.assertEqual(first["right_boundary"], "positive_to_zero_candidate")
+        self.assertEqual(first["closing_candidate_receipt"], candidates[1]["to_receipt"])
+        self.assertEqual(second["source_span_seconds"], 0)
+        self.assertIn("sellbacks", cycles["interpretation"])
+
+    def test_cached_reports_do_not_extend_source_persistence_or_shrink_candidate_intervals(self):
+        source = int(NOW.timestamp()) - 600
+        for minute, quantity, advance in ((0, 0, 0), (10, 0, 0), (11, 5, 60),
+                                           (12, 5, 60), (13, 0, 120), (14, 8, 180)):
+            self.add(minute, quantity, source=source + advance)
+        report = history.analyze(self.root, country="haw", item_id=1485)
+        cycles = report["stock_cycles"]
+        first = cycles["positive_report_runs"][0]
+        self.assertEqual((first["source_span_seconds"], first["distinct_source_reports"],
+                          first["cached_receipts"]), (0, 1, 1))
+        self.assertNotEqual(first["retrieval_interval_utc"][0], first["retrieval_interval_utc"][1])
+        self.assertEqual(cycles["cached_receipts"], 2)
+        self.assertEqual(cycles["candidates"][0]["source_update_interval"], [source, source + 60])
+        self.assertEqual(cycles["appearance_intervals"][0]["source_change_separation_bounds_seconds"], [60, 180])
+        self.assertEqual(cycles["max_retrieval_spacing_seconds"], 600)
+        self.assertEqual(cycles["source_age_seconds"], {"min": 600, "max": 1260})
+
+    def test_positive_increase_is_ambiguous_and_window_edges_remain_incomplete(self):
+        self.add(0, 5)
+        self.add(600, 10)
+        cycles = history.analyze(self.root, country="haw", item_id=1485)["stock_cycles"]
+        self.assertEqual(cycles["candidate_counts"], {"zero_to_positive": 0, "positive_to_zero": 0})
+        self.assertEqual(cycles["appearance_intervals"], [])
+        run, = cycles["positive_report_runs"]
+        self.assertEqual((run["left_boundary"], run["right_boundary"]), ("subset_start", "subset_end"))
+        self.assertIsNone(run["opening_candidate_receipt"])
+        self.assertIsNone(run["closing_candidate_receipt"])
+        self.assertEqual(run["net_increase_units"], 5)
+        self.assertEqual(run["source_span_seconds"], 36000)
+        self.assertEqual(cycles["max_retrieval_spacing_seconds"], 36000)
+
+    def test_quality_barriers_split_runs_and_do_not_link_appearance_candidates(self):
+        for minute, quantity in enumerate((0, 5, 3, 0, 7, 0, 8)):
+            self.add(minute, quantity, status=None if minute == 2 else "200")
+        cycles = history.analyze(self.root, country="haw", item_id=1485)["stock_cycles"]
+        self.assertEqual(cycles["candidate_counts"], {"zero_to_positive": 3, "positive_to_zero": 1})
+        self.assertEqual(len(cycles["appearance_intervals"]), 1)
+        self.assertEqual(cycles["appearance_intervals"][0]["source_change_separation_bounds_seconds"], [60, 180])
+        self.assertEqual(cycles["positive_report_runs"][0]["right_boundary"], "quality_barrier")
+        self.assertEqual(cycles["issue_counts"]["missing_or_invalid_http_status"], 1)
+        self.assertEqual(cycles["usable_observations"], 6)
+
+    def test_recovery_after_a_missing_row_starts_an_unbounded_positive_run(self):
+        self.add(0, 5)
+        self.add(1, 0, raw=b"invalid")
+        self.add(2, 4)
+        cycles = history.analyze(self.root, country="haw", item_id=1485)["stock_cycles"]
+        self.assertEqual(cycles["candidates"], [])
+        self.assertEqual(cycles["status"], "insufficient_evidence_for_transitions")
+        first, second = cycles["positive_report_runs"]
+        self.assertEqual(first["right_boundary"], "quality_barrier")
+        self.assertEqual(second["left_boundary"], "quality_barrier")
+        self.assertEqual(second["right_boundary"], "subset_end")
+
+    def test_cycle_summary_reuses_selected_target_and_partial_validation(self):
+        japan = (9, 0, 5, 5, 0)
+        for minute, quantity in enumerate((0, 8, 0, 7, 0)):
+            def add_japan(payload):
+                payload["stocks"]["jap"] = {"update": payload["stocks"]["haw"]["update"],
+                    "stocks": [{"id": 206, "name": "Xanax", "quantity": japan[minute], "cost": 100}]}
+                payload["stocks"]["unrelated_invalid_country"] = None
+            self.add(minute, quantity, modify=add_japan)
+        for country, item, expected in (("haw", 1485, (2, 2)), ("jap", 206, (1, 2))):
+            with self.subTest(country=country):
+                cycles = history.analyze(self.root, country=country, item_id=item)["stock_cycles"]
+                self.assertEqual(cycles["candidate_counts"],
+                                 dict(zip(("zero_to_positive", "positive_to_zero"), expected)))
+                self.assertEqual(cycles["usable_observations"], 5)
+
+    def test_unplaced_evidence_suppresses_all_cycle_linkage(self):
+        self.add(0, 0)
+        self.add(1, 5)
+        self.add(2, 0)
+        (self.root / "objects" / ("a" * 64 + ".bin")).write_bytes(b"orphan")
+        cycles = history.analyze(self.root, country="haw", item_id=1485)["stock_cycles"]
+        self.assertEqual(cycles["status"], "insufficient_evidence_for_transitions")
+        self.assertEqual(cycles["candidates"], [])
+        self.assertEqual(cycles["positive_report_runs"], [])
+        self.assertEqual(cycles["issue_counts"]["payload_without_receipt"], 1)
+
+    def test_conflicts_simultaneous_retrievals_and_regressions_do_not_supply_candidates(self):
+        source = int(NOW.timestamp()) - 600
+        for minute, quantity, stamp in ((0, 0, source), (1, 5, source),
+                                        (2, 0, source + 120), (2, 5, source + 180),
+                                        (3, 0, source + 240), (4, 5, source + 60),
+                                        (5, 0, source + 300)):
+            self.add(minute, quantity, source=stamp)
+        cycles = history.analyze(self.root, country="haw", item_id=1485)["stock_cycles"]
+        self.assertEqual(cycles["candidates"], [])
+        self.assertEqual(cycles["comparison_counts"], {"increase": 0, "decrease": 0, "unchanged": 0})
+        self.assertEqual(cycles["positive_report_runs"], [])
+
     def test_unplaced_context_disables_comparisons_without_losing_other_rows(self):
         self.add(0, 0)
         member, receipt = self.add(1, 99)
