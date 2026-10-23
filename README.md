@@ -80,7 +80,10 @@ backups verify uploaded archives and payload hashes by reading them back.
   private 60-minute Hawaii Shark Fin shadow consumer. Its AWS definition defaults
   to disabled. Predictions are not validated purchasing or travel advice.
 - **Planned product capabilities:** broader stock intelligence, historical trends,
-  forecasting and travel support are described in the [roadmap](docs/roadmap.md).
+  adaptive forecasting across country/item pairs and availability at requested
+  times (including travel arrival) are described in the [roadmap](docs/roadmap.md).
+  The hourly, 60-minute pilot is a bounded experiment, not a universal horizon or
+  update frequency. Broader forecasting and travel support remain planned.
   They are not implementation commitments.
 
 ## Getting started

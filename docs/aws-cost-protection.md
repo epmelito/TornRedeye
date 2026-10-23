@@ -4,6 +4,12 @@ Architecture assessment for [Issue #17](https://github.com/epmelito/TornRedeye/i
 Research verified **2026-10-11**; proposals below are not approved deployments.
 No resources, schedules, account plans, subscriptions or evidence were changed.
 
+This is a date-scoped assessment, not current operational status. Subsequent
+backup activation and recovery verification are recorded in
+[deployment status](deployment.md#verified-operational-status). The account/hosting
+proposals and October 11 financial baseline below remain historical; later backup
+success does not establish their implementation or the publisher's enabled state.
+
 ## Recommendation
 
 First establish a verified backup outside this AWS account. Then target
@@ -293,13 +299,14 @@ an approved funded account or a separate approved collection migration.
 
 ## Evidence continuity and recovery requirements
 
-Issue #53 starts a fresh operational lineage. The [current backup contract](evidence-backup.md)
-adds immutable prospective records and an independent empty-lineage anchor. The
-original archive, pins and recovery prerequisites remain sealed and unchanged.
+The [current backup contract](evidence-backup.md) covers the operational lineage,
+immutable prospective records and its independent empty-lineage anchor. Preserve
+the original archive, pins and recovery prerequisites separately.
 
-The [evidence backup workflow](evidence-backup.md) documents the Issue #19 offline
-tooling and its manifest/verification contract. It does not establish a completed
-live backup or authorize export, storage, collector pauses or restoration.
+The [evidence backup workflow](evidence-backup.md) documents the active tooling and
+verification contract. Dated backup/recovery evidence is recorded in deployment
+status; neither this proposal nor those past results authorize further exports,
+storage changes, collector pauses or restoration.
 
 The approved Issue #23 architecture has exactly **two persistent evidence
 copies: canonical AWS S3 primary and one independent Azure Blob Storage backup**.
@@ -347,7 +354,7 @@ and recurring backup activation remain separately authorized operations.
   rather than rewriting canonical records silently.
 - Record tested restore duration, verified cutoff and remaining gaps; recovery
   time and acceptable loss are owner decisions, not guarantees. After the initial
-  complete export, propose daily incremental verified copies: a one-day target
+  complete export, maintain daily incremental verified copies: a one-day target
   RPO when backups succeed, with greater exposure after failures. Include periodic
   completeness reconciliation and restore checks. Cadence must match approved
   loss tolerance and costs.
@@ -360,9 +367,10 @@ still exists, not recovery of evidence already expired before retention changes.
 
 ## Proposed follow-up packages, in priority order
 
-1. **Evidence export and recovery:** implement bounded private manifest/export
-   tooling and integrity tests; separately approve live export, Azure backup
-   storage, consistent cutoff and restore test. Confirm live retention and quantify archive.
+1. **Evidence export and recovery:** tooling, daily Azure backup and independent
+   recovery have since been verified as recorded in deployment status. Preserve
+   those capabilities; reassess live retention, coverage and archive size before
+   a future account/hosting transition.
 2. **Low-cost operator protection:** configure approved private budget/credit
    notices, two traffic alarms and manual disable procedure; validate destinations
    and price/allowance eligibility. No automatic destructive response.

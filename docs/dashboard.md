@@ -261,8 +261,9 @@ sam validate --lint --template-file dashboard-template.json --region eu-north-1
 git diff --check
 ```
 
-The generated `.aws-sam/dashboard-publisher.zip` contains only
-`dashboard_publisher.py` and uses deterministic atomic packaging. Boto3/botocore
+The generated `.aws-sam/dashboard-publisher.zip` contains `dashboard_publisher.py`,
+`tornredeye/__init__.py` and `tornredeye/evidence_paths.py`, using deterministic
+atomic packaging. Boto3/botocore
 come from the Lambda runtime; no vendored dependency is needed. Production
 packaging should use committed LF source, following the existing collector release
 practice, after review and commit. Do not deploy an unreviewed working tree.

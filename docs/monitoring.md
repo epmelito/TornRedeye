@@ -5,9 +5,11 @@ The separate Issue #11 public operations dashboard reuses these signals. See
 security, incremental costs and deployment instructions. It changes no collector
 monitoring resources or collection behavior.
 
-Issue #8 adds offline definitions in `template.json`; deployment requires separate
-authorization and independent infrastructure/security review. Monitoring uses the
-existing collector log group, two dimensionless metrics in
+`template.json` defines monitoring resources; future deployment changes require
+separate authorization and independent infrastructure/security review. See
+[deployment status](deployment.md#verified-operational-status) for dated activation
+evidence, which does not itself verify alarm or notification delivery. Monitoring
+uses the existing collector log group, two dimensionless metrics in
 `TornRedeye/${AWS::StackName}`, three standard alarms, and one SNS topic. It adds
 no collector AWS API calls, YATA requests, jobs, billing integration, dashboard,
 or S3 request monitoring. Collection, evidence retention and polling safeguards
@@ -132,6 +134,11 @@ without account billing evidence, which is outside Issues #8 and #11.
 
 Count application-level calls before SDK retries. These scenarios are estimates,
 not an upper bound or an exact bill:
+
+The table counts GET/PUT operations only. A result without response bytes also
+performs an exact raw-key `ListObjectsV2` check before its failure-document write;
+include that LIST request separately. Ordinary persistence with response bytes
+does not list the evidence namespace.
 
 | Invocation path | GET attempts | PUT attempts | Provider retrievals |
 | --- | --- | --- | --- |
