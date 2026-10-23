@@ -66,12 +66,19 @@ Issue #49 and its frozen hourly retrospective evaluation remain unchanged.
 This preserves source-reported availability as a proxy. It does not identify exact
 in-game stock, restock times, purchase success or independent statistical samples.
 
-## Independent AWS consumer (offline implementation)
+## Independent AWS consumer
 
 `aws_shadow_forecast.py` retains the Issue #51 private Hawaii Shark Fin pilot,
 60-minute horizon, unsmoothed expanding empirical mean, persistence comparator,
 300-second source freshness, paired Brier scoring and immutable issuance protocol.
 Issue #49's frozen historical evaluation remains separate and unchanged.
+
+The private live pilot is activated, with unattended hourly execution verified;
+see [dated deployment status](deployment.md#verified-operational-status). This is
+distinct from the offline core's synthetic accounting records and the template's
+disabled default. Activation does not establish predictive usefulness, calibration
+or public availability. The broader [adaptive direction](roadmap.md#adaptive-forecasting-direction)
+does not change this pilot's fixed experimental contract.
 
 ### Invocation and evidence boundary
 

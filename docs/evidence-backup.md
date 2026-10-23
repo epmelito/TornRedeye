@@ -1,9 +1,10 @@
 # Independent evidence backup and isolated recovery
 
-Issue #53 starts a fresh operational lineage; this implementation is offline.
-AWS S3 remains primary and existing Azure Blob Storage remains the one independent
-persistent backup. Temporary local exports/restores are disposable private staging.
-No cloud write, schedule change, deletion or cutover has been performed.
+The operational lineage is `live-v1`. AWS S3 remains primary and Azure Blob Storage
+remains the one independent persistent backup. Temporary local exports/restores
+are disposable private staging.
+Daily backup activation, scheduled execution and prior independent recovery are
+recorded in [deployment status](deployment.md#verified-operational-status).
 
 ## Scope and trust
 
@@ -67,9 +68,11 @@ an authorized cutoff. Failed pages, transfers or unresolved intents prevent succ
 
 ## Invocation and permissions
 
-The existing daily GitHub workflow remains guarded, serialized and disabled unless
-explicitly activated. It retains its 03:23 UTC cadence and short-lived AWS/Azure
-OIDC authentication. Replace the old baseline configuration with the anchor pin.
+The daily GitHub workflow is guarded and serialized; its job requires explicit
+enablement through `DAILY_BACKUPS_ENABLED`. It retains its 03:23 UTC cadence and
+short-lived AWS/Azure OIDC authentication. The operational configuration uses the
+anchor pin rather than the historical baseline pin. Workflow guards are not
+evidence of runtime health.
 The CLI is `incremental_runner.py --help`; live access still requires separately
 approved credentials/configuration and `--live-access-approved`. Do not run it
 as an offline validation step.
@@ -123,8 +126,8 @@ new operational parser.
 The new tools intentionally do not reinterpret old backup schemas. Verify and retain
 the frozen historical recovery tooling before replacing operational code/configuration.
 No retention expiry, archive deletion, trust-root replacement or historical migration
-is authorized by the reset. Current deployed backup settings continue until the
-separately approved cutover.
+is authorized by the lineage transition. Historical backup settings and pins are
+archive interpretation material, not configuration for the active operational backup.
 
 Successful daily backups target roughly one day of potential loss, not zero loss;
 failed runs extend exposure. Actual coverage, recovery duration and cloud configuration

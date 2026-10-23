@@ -1,8 +1,8 @@
 # Operational stock evidence
 
-Issue #53's approved 2026-10-21 decisions supersede migration and dual-prefix
-proposals. The offline implementation starts evidence lineage `live-v1`.
-Deployment and cutover have not been performed.
+The operational evidence lineage is `live-v1`; all-country collection has been
+activated. See [dated operational verification](deployment.md#verified-operational-status).
+The approved 2026-10-21 decisions supersede migration and dual-prefix proposals.
 
 ## Storage and identity
 
@@ -66,8 +66,11 @@ embedded retrieval/source times and key partitions do not. Forecast inputs retai
 both kinds of time. Time partitioning is discovery, not a completeness assertion
 about collection between observations. See [shadow forecasting](shadow-forecast.md).
 
-Old S3 objects, forecasts, Azure baseline and completion manifests remain sealed
-and unchanged. New operational readers do not enumerate them, migrate links,
+Historical S3 objects, forecasts, Azure baseline and completion manifests are
+preserved separately. Operational readers do not enumerate them, migrate links,
 reserialize historical records or use historical labels for training. Archive
 interpretation uses its preserved original code/configuration and trust material.
 See [backup recovery](evidence-backup.md) and [cutover](deployment.md).
+
+Reader isolation and CloudFormation Retain do not establish deletion protection
+or Object Lock; archive protection depends on the actual retention and access controls.

@@ -1,8 +1,17 @@
 # Deployment and operation
 
-Issue #53's approved clean reset is implemented locally. Nothing here authorizes
-AWS/Azure access, deployment, stopping collection or activating schedules. Existing
-live collection, dashboard and backups have not been changed.
+## Verified operational status
+
+As of **2026-10-23**, the completed all-country operational activation is recorded
+in [Issue #55](https://github.com/epmelito/TornRedeye/issues/55): collection is enabled,
+and hourly private shadow forecasting is enabled with unattended execution verified.
+Daily Azure backup is enabled; scheduled GitHub Actions
+[run 39926391370](https://github.com/epmelito/TornRedeye/actions/runs/39926391370)
+succeeded. Independent Azure recovery previously passed. These are dated operational
+observations, not guarantees of continuing health, complete coverage or forecast
+quality. The public dashboard publisher's enabled state is **not verified** here.
+
+This guide does not authorize further cloud access, deployment or schedule changes.
 
 ## Offline validation
 
@@ -42,7 +51,13 @@ restriction halts and stale-attempt fail-closed behavior. Evidence-lineage reset
 is never permission to clear cooldown, halt, spacing mode or an uncertain attempt.
 Collector async retries remain disabled and the schedule remains one minute.
 
-## Exact separately authorized cutover
+## Historical cutover procedure
+
+The all-country cutover and activation are complete as recorded above. The ordered
+procedure below preserves the approved transition safeguards and audit context;
+it is not a pending task list or permission to repeat initialization against the
+active lineage. It does not establish verification of every optional step, including
+dashboard publication. Future changes require their own approved scope and preflight.
 
 1. **Live preflight approval:** inspect actual identities, stack parameters,
    schedules, IAM, bucket encryption/lifecycle/retention, backup configuration,

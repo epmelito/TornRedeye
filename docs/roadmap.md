@@ -32,9 +32,39 @@ Fin is the initial research case, not a permanent product or architectural limit
 The implemented private shadow consumer is experimental; broader forecasting,
 recommendations, travel planning, personalization and alerts remain planned.
 
+### Adaptive forecasting direction
+
+Develop one reusable forecasting framework across country/item pairs, with
+independently learned behavior and uncertainty for each pair. Learn from sellouts,
+replenishment candidates, quantity changes, irregular cycles and changing behavior
+over time. Do not impose a universal restock duration, prediction horizon or
+forecast update frequency. Future outputs should support uncertain replenishment
+windows and availability at user-requested times, including travel arrival, where
+the evidence supports those targets.
+
+Progress toward near-real-time processing and forecast updates within YATA's
+known, accepted user-reported source latency. This is a product goal, not a
+measured latency guarantee or an authorization to increase source requests.
+Preserve provenance, missingness and source freshness; distinguish source and
+retrieval times from uncertain event intervals. More frequent processing cannot
+recover events hidden by delayed or cached source reports.
+
+Start with simple evidence-supported methods and compare them prospectively
+against feasible baselines before adding complexity. Learn only from information
+and resolved outcomes available at each decision; assess changing behavior without
+rewriting earlier predictions. No ML method, service or software framework is
+prescribed by this direction.
+
+Hawaii Shark Fin and Japan Xanax are contrasting research cases for shared methods,
+not separate item-specific systems. The frozen Hawaii Shark Fin 60-minute benchmark
+and completed private pilot implementation remain bounded experiments. Their hourly
+cadence, horizon and freshness rules do not set universal product standards; their
+contracts and historical results remain unchanged. Live pilot execution does not
+establish validated forecasts or public purchasing/travel advice.
+
 ## Delivery milestones
 
-TornRedeye advances toward useful, evidence-backed stock availability forecasts through delivery milestones, not fixed dates or arbitrary sample-size thresholds. Hawaii Shark Fin is the initial research case, not a permanent architectural boundary. Existing data collection and backup continue throughout.
+TornRedeye advances toward useful, evidence-backed stock availability forecasts through delivery milestones, not fixed dates or arbitrary sample-size thresholds. Hawaii Shark Fin is the initial research case, not a permanent architectural boundary. Preserve evidence continuity and backup through separately authorized operational changes.
 
 1. **Evidence foundation.** Collect, preserve, verify, and prepare historical stock observations. **Exit:** Traceable evidence and reusable stock-history processing are available.
 

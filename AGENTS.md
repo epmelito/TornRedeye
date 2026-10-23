@@ -99,6 +99,10 @@ configuration, and source contracts for discoverable behavior; do not copy mutab
 inventories into multiple documents. Separate current status, historical
 evidence, and temporary handoffs.
 
+Preserve the README's established structure, Mermaid architecture diagram,
+technology stack table and substantive content. Focused incremental updates and
+extensions are permitted; fundamental restructuring requires explicit user approval.
+
 After implementation changes, review documentation directly affected by the
 change. Update any instructions, behavior descriptions, contracts, or examples
 that would otherwise become inaccurate or incomplete. Avoid unrelated
