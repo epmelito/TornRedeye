@@ -114,3 +114,102 @@ python -B -m unittest discover -s tests -p test_availability_forecast.py
 python -B -m unittest discover -s tests
 git diff --check
 ```
+
+## Requested-time offline comparison
+
+`tornredeye.requested_availability` is a separate retrospective evaluator. It
+reuses the frozen baseline's input validation, chronological source-state
+selection and probability calculation without changing that experiment or the
+operating shadow pilot. It accepts explicit origin/target UTC pairs and a required
+maximum source age, with no automatic origin schedule or universal horizon.
+The target is positive quantity in an eligible source report at the requested
+time, not actual in-game availability, replenishment or purchasing success.
+
+The Python API is
+`evaluate(history, requests, country=..., item_id=..., maximum_source_age_seconds=..., attempts=(), available_at=None)`
+in `tornredeye.requested_availability`. Use a previously verified stock-history
+JSON report for the selected country/item. Optional `attempts` use the existing
+normalized-attempt contract. Requests are a nonempty JSON list, for example:
+
+```json
+[
+  {"origin_utc": "2026-10-24T00:00:00Z", "target_utc": "2026-10-24T00:10:00Z"},
+  {"origin_utc": "2026-10-24T00:00:00Z", "target_utc": "2026-10-24T01:00:00Z"},
+  {"origin_utc": "2026-10-24T01:00:00Z", "target_utc": "2026-10-24T01:10:00Z"},
+  {"origin_utc": "2026-10-24T01:00:00Z", "target_utc": "2026-10-24T02:00:00Z"}
+]
+```
+
+These are example research requests, not claims about available evidence. From
+the repository root, with already-local private inputs:
+
+```powershell
+. ./.chatgpt/powershell-helpers.ps1
+Invoke-NativeCommand python @('-B', '-m', 'tornredeye.requested_availability', 'C:\private\history.json', 'C:\private\requests.json', '--country', 'haw', '--item-id', '1485', '--maximum-source-age-seconds', '300')
+```
+
+Use the same requests for Japan (`jap`/`206`); do not pool item histories. Repeat
+with 180 seconds for exploratory sensitivity. The 10/60-minute offsets and
+300/180-second limits are research settings, not production defaults. Comparisons
+between freshness settings may have different eligibility; inspect coverage and
+match individual pairs before interpreting score differences across settings.
+
+- By default, availability is proxied by original retrieval time, explicitly
+  labelled `retrospective_retrieval_time_proxy`. Optional `--available-at` supplies
+  a JSON mapping from every input raw/attempt key to downstream availability time;
+  mappings must be complete and cannot precede retrieval. Original retrieval and
+  source times remain separate. Simultaneous deliveries are processed together
+  by the cutoff, ordered by original retrieval time. Supplied availability times
+  are caller assertions, not verified live issuance. Restored file times cannot
+  establish historical availability. A matched attempt supplies no new stock value
+  until its raw counterpart becomes available; a previous fresh report may carry
+  through that unknown attempt. When delivered together, validated raw data
+  takes precedence over the same collection's unknown index entry.
+- Origins and outcomes use only inputs available by their respective times.
+  Source age is measured at the decision time. Targets must follow origins and
+  require a source update after the origin. Targets beyond the last input
+  availability remain outside the evidence cutoff. Cached reports never renew
+  source age. An unavailable or regressing attempt may carry the previous valid
+  source report only within the configured age limit, explicitly marked
+  `carried_over_unavailable_attempt`. It never supplies a zero value or renews
+  the report's source age. No valid prior report means no observation; an expired
+  report remains stale. Known conflicts block selection without older fallback; later
+  contradictions are audit annotations and never rewrite earlier decisions.
+- Persistence uses the eligible origin's positive/zero state. Historical probability
+  is the unsmoothed positive fraction of earlier origin-eligible requested outcomes
+  with target times strictly before the current origin. A target exactly equal
+  to the origin is excluded from training, even if its source report is already
+  available: there is no proof outcome accounting completed before issuance.
+  This retrospective convention allows strictly earlier targets without imposing
+  an arbitrary processing delay, but cannot prove actual accounting completion.
+  It may omit equal-time labels that a real consumer processed first, and may
+  admit earlier labels a delayed consumer had not yet processed. Live evaluation
+  requires actual resolution/readback timing. The frozen evaluator's inclusive
+  boundary and the live pilot's accounting behavior remain unchanged. Each target
+  source timestamp enters training once across all requests, including cold-start
+  outcomes. This prevents cached/repeated labels multiplying training weight, but
+  does not establish independence or an elapsed-time prevalence estimate. A request
+  list affects this baseline's training sample. No resolved training labels means
+  empirical abstention, not an invented prior probability.
+- Scores use exactly the same eligible origin/target pairs for both methods,
+  excluding empirical cold starts and unresolved labels. Output includes paired
+  Brier scores, positive/zero outcomes, exclusions, abstentions, per-offset summaries,
+  source ages, evidence endpoints and training-label references. Each record's
+  `training_count` selects the prefix of the returned `training_labels` available
+  then. CLI inputs carry file hashes; evidence and output remain private. Exit 0
+  can report no scored pairs with null scores; invalid inputs exit 2 without a report.
+  Error diagnostics name the input stage and a safe reason (including JSON line/
+  column or an allowlisted validation failure), without echoing paths, evidence
+  keys, input values or raw exception messages.
+
+This is retrospective replay, even with supplied availability times; it does not
+create genuinely issued forecasts or establish independent accuracy/calibration.
+Overlapping requests, repeated source states and unresolved outcomes make scores
+dependent and potentially selective. For newer-evidence evaluation, predeclare
+requests after the explored audit endpoint `2026-10-23T08:40:31Z` and retain verified
+coverage/provenance. Do not describe that explored sample or data used to select
+settings as untouched validation. This command performs no evidence download,
+restoration or cloud access. Without newer verified inputs, synthetic tests verify
+software behavior only; actual predictive performance remains unmeasured.
+
+Focused validation: `python -B -m unittest discover -s tests -p test_requested_availability.py`.
