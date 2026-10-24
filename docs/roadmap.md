@@ -64,6 +64,9 @@ and completed private pilot implementation remain bounded experiments. Their hou
 cadence, horizon and freshness rules do not set universal product standards; their
 contracts and historical results remain unchanged. Live pilot execution does not
 establish validated forecasts or public purchasing/travel advice.
+The frozen baseline is a historical experiment, not a required development gate.
+Select a reusable, player-useful target from what the observations can identify
+before choosing a method; insufficient evidence can justify deferring implementation.
 
 ## Delivery milestones
 
@@ -73,7 +76,7 @@ TornRedeye advances toward useful, evidence-backed stock availability forecasts 
 
 2. **Forecasting target selection.** Determine which outcomes the observations can credibly predict, including limitations of inferred replenishment events. **Exit:** A defined prediction target, forecast horizons, and a defensible evaluation approach.
 
-3. **Offline forecasting baseline.** Produce initial probabilistic forecasts for Hawaii Shark Fin and compare them against feasible simple alternatives. **Exit:** Reproducible predictions, historical evaluation, and clearly reported uncertainty. Production accuracy is not assumed.
+3. **Offline forecasting baseline.** Where evidence supports the selected reusable target, compare a simple country/item forecast against feasible alternatives. **Exit:** Reproducible predictions, historical evaluation, and clearly reported uncertainty. Production accuracy is not assumed.
 
 4. **Forward validation.** Evaluate a selected approach against subsequently collected observations that did not inform its selection. Examine forecast reliability, calibration, and performance against simple baselines. **Exit:** Evidence supporting practical usefulness, or a documented reason to revise the target or method.
 
