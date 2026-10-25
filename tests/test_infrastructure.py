@@ -182,7 +182,7 @@ class MonitoringTests(unittest.TestCase):
         self.assertEqual(errors["Dimensions"], [{"Name": "FunctionName", "Value": {"Ref": "CollectorFunction"}}])
         self.assertEqual(properties("PollingHaltAlarm")["MetricName"], "PollingHalts")
         for name, periods, breaching_periods in (
-            ("CollectionErrorsAlarm", 5, 3), ("PollingHaltAlarm", 1, 1),
+            ("CollectionErrorsAlarm", 6, 3), ("PollingHaltAlarm", 1, 1),
         ):
             config = properties(name)
             self.assertEqual(config["Period"], 60)
@@ -202,19 +202,29 @@ class MonitoringTests(unittest.TestCase):
             "Fn::Equals": [{"Ref": "ScheduleState"}, "ENABLED"],
         })
 
-    def test_error_alarm_requires_three_breaching_minutes_in_five(self):
+    def test_error_alarm_requires_three_breaching_minutes_in_six(self):
         alarm = properties("CollectionErrorsAlarm")
 
-        # check the configured threshold; service timing is verified after deployment
+        # check configured windows, not CloudWatch ingestion or evaluation timing
         def breaches(window):
             return sum((value or 0) >= alarm["Threshold"]
                        for value in window[-alarm["EvaluationPeriods"]:]) >= alarm["DatapointsToAlarm"]
 
-        self.assertFalse(breaches([None] * 5))
-        self.assertFalse(breaches([0, 0, 0, 1, 1]))
-        self.assertFalse(breaches([0, 0, 0, 0, 3]))
-        self.assertTrue(breaches([1, 0, 1, 0, 1]))
-        self.assertFalse(breaches([1, 0, 1, 0, 1, 0]))
+        self.assertFalse(breaches([None] * 6))
+        self.assertFalse(breaches([0, 0, 0, 0, 1, 1]))
+        self.assertFalse(breaches([0, 0, 0, 0, 0, 3]))
+        self.assertFalse(breaches([None, 1, None, 1, None, None]))
+        self.assertTrue(breaches([None, 1, None, 1, None, 1]))
+        self.assertTrue(breaches([1, 1, 1, 0, 0, 0]))
+
+        alternating = [1, 0] * 12
+        for end in range(alarm["EvaluationPeriods"], len(alternating) + 1):
+            with self.subTest(end=end):
+                self.assertTrue(breaches(alternating[:end]))
+
+        self.assertTrue(breaches([1, 0, 1, 0, 1, 0]))
+        self.assertFalse(breaches([1, 0, 1, 0, 1, 0, 0]))
+        self.assertFalse(breaches(alternating + [0] * 6))
 
     def test_private_configurable_destination_and_scoped_publish_permission(self):
         self.assertEqual(TEMPLATE["Parameters"]["OperatorEmail"]["Default"], "")

@@ -458,13 +458,13 @@
         ],
         "ComparisonOperator": "GreaterThanOrEqualToThreshold",
         "Threshold": 1,
-        "EvaluationPeriods": 5,
+        "EvaluationPeriods": 6,
         "DatapointsToAlarm": 3,
         "TreatMissingData": "notBreaching",
         "AlarmName": {
           "Fn::Sub": "${AWS::StackName}-collection-errors"
         },
-        "AlarmDescription": "Lambda errors in at least 3 of 5 one-minute periods, including collection, configuration, control, persistence or runtime timeout. OK means the error threshold no longer breaches, not proof of observation recovery.",
+        "AlarmDescription": "Lambda errors in at least 3 of 6 one-minute periods, including collection, configuration, control, persistence or runtime timeout. OK means the error threshold no longer breaches, not proof of observation recovery.",
         "Namespace": "AWS/Lambda",
         "MetricName": "Errors",
         "Dimensions": [

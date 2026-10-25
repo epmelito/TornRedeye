@@ -21,8 +21,17 @@ keep their existing behavior.
 | --- | --- |
 | `PersistedObservations` | Count `persisted collection_id=` only with `acquisition_status=success` and a nonzero `usable_observations` count. Emitted after both evidence writes or matching retries complete. Valid item zeros and cached exports count; raw-only writes, skipped runs, acquisition failures and exports without usable item fields do not. This is an acquisition/validation heartbeat, not proof that every country is fresh or available. |
 | Missing observations alarm | Sum per minute, `FILL(observations, 0)`, below 1 for 15 of 15 minutes. Silence, missing metrics and explicit zeros breach. One observation in the evaluation window clears the alarm. Detects roughly 15 minutes without persisted observations, including failed schedule delivery or stopped logging. |
-| Collection errors alarm | Built-in `AWS/Lambda Errors`, scoped to the collector function, sum >= 1 in at least 3 of 5 one-minute periods. Requires three breaching minutes; three errors confined to one minute do not trigger it. Includes propagated source, configuration, control, persistence and release errors, and runtime timeouts. Missing data is nonbreaching. |
+| Collection errors alarm | Built-in `AWS/Lambda Errors`, scoped to the collector function, sum >= 1 in at least 3 of 6 one-minute periods. Requires three breaching minutes; three errors confined to one minute do not trigger it. Includes propagated source, configuration, control, persistence and release errors, and runtime timeouts. Missing data is nonbreaching. |
 | `PollingHalts` and halt alarm | Count `collection skipped` logs with `reason=halted:`; sum >= 1 in one minute. Covers access/rate halts and abandoned attempts. Ordinary spacing, cooldown, conflict and in-flight skips do not count. Missing data is nonbreaching. A restriction-setting invocation already raises a Lambda error; subsequent halted skips keep this alarm active. |
+
+On October 25, 2026, alternating source failures (HTTP 502 responses and read
+timeouts) caused repeated ALARM/OK notifications under the 3-of-5 configuration:
+successive five-minute windows contained three, then two breaching minutes.
+With 3-of-6, both `[1,0,1,0,1,0]` and `[0,1,0,1,0,1]` meet the threshold,
+so sustained alternating errors remain alarming under the configured window
+logic. Fewer than three breaching minutes allows recovery. These offline window
+checks do not simulate CloudWatch's full evaluation or delayed metric ingestion;
+actual transition timing requires separately authorized live verification.
 
 Metric filters default to zero in minutes with other log events; without events
 they publish nothing. The heartbeat fills these gaps explicitly to avoid old
@@ -118,7 +127,7 @@ unavailable values as zero or merge these classifications into a measured bill.
 | S3 storage | Measured daily bucket bytes; derived time-weighted monthly storage = sum(sample GB * covered days) / days in month, with explicit gaps and price-list GB units. Stored raw byte lengths can describe raw payload growth only. | Estimated storage cost = derived GB-month * verified regional Standard storage rate. A latest-size * rate snapshot is a run-rate estimate, not month's consumption. Raw payload bytes omit normalized objects, control data and applicable storage overhead. Artifact buckets are outside the evidence-bucket scope. |
 | S3 GET/PUT operations | Estimated application operations from the execution paths below, optionally informed by deduplicated existing logs and receipts. Exact SDK wire-request and billed-operation totals are unavailable from current evidence; daily object counts do not measure requests. | Estimated request cost = GET attempts / 1,000 * verified GET rate + PUT attempts / 1,000 * verified PUT rate, under stated billing assumptions. Include guard operations, partial writes and comparisons. Retries and error charging prevent equating application calls with charged requests. Do not enable paid S3 request metrics for this estimate. |
 | CloudWatch log ingestion/storage | Measured IncomingBytes over covered windows; derived ingestion GB using price-list units. Retained compressed bytes and time-weighted storage are separate from uncompressed ingestion. | Estimated ingestion cost = GB * verified ingestion rate; estimated storage cost = GB-month * storage rate. Fourteen-day retention limits reconstruction from log records. Query scanning and metric-read costs are separate and unavailable unless the corresponding usage is known; this issue adds no queries. |
-| CloudWatch monitoring resources | Defined resource inventory: two custom metrics and three standard alarm metrics. Derived chargeable resource-month estimates depend on metric emission hours and alarm existence hours. | Estimated full-month baseline is $0.60 metrics + $0.30 alarms at the rates below. This inventory is not measured account usage. Basic AWS metrics are reused; neither the 3-of-5 change nor Issue #11 adds a metric or alarm. |
+| CloudWatch monitoring resources | Defined resource inventory: two custom metrics and three standard alarm metrics. Derived chargeable resource-month estimates depend on metric emission hours and alarm existence hours. | Estimated full-month baseline is $0.60 metrics + $0.30 alarms at the rates below. This inventory is not measured account usage. Basic AWS metrics are reused; neither the 3-of-6 change nor Issue #11 adds a metric or alarm. |
 | SNS publishes and deliveries | Measured existing `AWS/SNS NumberOfMessagesPublished`, `NumberOfNotificationsDelivered` and `NumberOfNotificationsFailed`, Sum with TopicName for this monitoring topic. Derived covered-window totals; inactive/missing samples remain unknown unless coverage establishes zero activity. | Publish count is not total billed API request units. A scenario estimate uses alarm transitions * confirmed subscribers for deliveries, with publish-size units, failures, retries, tests and subscription changes stated separately. Topic delivery metrics mix protocols if other destinations are added; email-only totals then become unavailable without protocol-specific evidence. Delivery success does not prove an operator read the email. No fixed notification volume is assumed. |
 
 Use the existing [SNS metric definitions](https://docs.aws.amazon.com/sns/latest/dg/sns-monitoring-using-cloudwatch.html)
@@ -241,7 +250,7 @@ storage $0.028/GB-month. No account billing API was used.
 | Existing persistence log gains a status token | Up to 25 additional ASCII bytes per completed persistence. At 44,640 nominal schedule opportunities in a 31-day month, about 1.12 MB extra ingestion, excluding duplicates/manual invocations | Less than 0.001 ingestion plus storage in this stated scenario |
 | SNS | State-transition notifications, one confirmed email subscriber; actual volume unknown. Advertised paid rates: $0.50/million requests and $2/100,000 email deliveries | Variable; do not invent notification volume |
 
-The error alarm now requires three breaching minutes out of five; it can reduce
+The error alarm now requires three breaching minutes out of six; it can reduce
 transient-error notifications but does not change resource charges. No numeric
 SNS saving is projected. Duplicate log increments do not create additional
 metric dimensions, but can distort metric counts and include additional ingested
