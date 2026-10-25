@@ -145,3 +145,97 @@ separately authorized preflight, deployment, smoke tests and activation. Runtime
 reads are bounded to recent hours; source cadence is unchanged. Immutable forecast
 storage grows by at most four records per recorded slot, with bounded per-record
 snapshots and no lifetime-wide routine forecast inventories.
+
+## Requested-time offline accounting
+
+`RequestedForecastRun` in `tornredeye.requested_forecast` is a separate private,
+in-memory requested-time operation. It reuses `OfflineShadowRun` evidence capture,
+clock validation and retrospective audit annotations without changing that class,
+the frozen historical evaluator, or the AWS pilot's hourly identities and records.
+It has no provider access, storage adapter, scheduler, persistence/restart guarantee
+or interface for importing historical forecasts as issued decisions.
+
+```python
+from datetime import datetime, timedelta, timezone
+from tornredeye.requested_forecast import RequestedForecastRun
+
+run = RequestedForecastRun(country="haw", item_id=1485,
+                           maximum_source_age_seconds=300)
+run.observe(verified_history)
+forecast = run.issue(datetime.now(timezone.utc) + timedelta(minutes=10),
+                     request_id="private-request-1")
+# capture additional verified history as it becomes available
+outcomes = run.resolve()
+report = run.report()
+```
+
+`verified_history` is a caller-supplied, previously validated stock-history report;
+optional `observe(..., attempts=...)` uses the existing normalized-attempt index.
+The operation does not independently verify raw archives. Retain original private
+history and evidence matching the snapshot's input digest; captured normalized
+rows preserve evidence keys, original retrieval/source timestamps and issues.
+The clock defaults to UTC now; inject fake clocks only for deterministic offline
+exercises. Japan Xanax (`jap`/`206`) uses the same class with a separate run and
+training history. The example horizon and freshness limit are caller choices,
+not universal product settings.
+
+- `observe` captures cumulative evidence at its processing-clock time. Earlier
+  source/retrieval timestamps do not establish earlier downstream availability.
+  Changed or removed captured rows and future retrievals fail. New raw evidence
+  may replace a previously unknown normalized attempt only in a later snapshot.
+  Selection binds the snapshot ID and capture time; `first_retrieved_at_utc` is
+  original retrieval context, not a downstream availability assertion.
+- `issue(target_utc, request_id=...)` accepts an aware datetime or ISO timestamp
+  strictly after actual issuance. Multiple targets within one hour are allowed.
+  A nonempty caller request ID may be issued once per run; duplicate IDs, including
+  attempts to change their target, fail without rewriting the original record.
+  Retrieve prior decisions from `report()`. Forecast hashes bind the offline
+  record kind, selected pair, request ID, actual issuance/target, methods and
+  freshness setting. These are run-local identities, not a new durable S3 contract.
+- Only snapshots captured by issuance may supply inputs. Source age is measured
+  at the decision, never renewed by cached retrievals. Failed/unavailable attempts
+  can carry a previous valid report within the chosen freshness limit, explicitly
+  flagged; they never create observed zero stock or hide a known source conflict.
+  Missing/stale/conflicting origins have `origin_ineligible` status and null
+  probabilities. An eligible origin without resolved training produces
+  `no_resolved_training_labels` and a null empirical probability; its persistence
+  comparator still reports the eligible origin's positive/zero state.
+- The empirical probability is the unsmoothed positive fraction of earlier
+  origin-eligible outcomes already accounted for by `resolve()`. Each target source
+  timestamp contributes once per run despite repeated requests or cached reports.
+  Eligible resolved outcomes are pooled across requested horizons; the current
+  empirical probability does not yet condition on travel time, time of day or
+  restock windows. Different target times can therefore receive the same
+  probability when issued with identical information.
+  No labels are fabricated from historical observations. `training` retains the
+  contributing forecast/outcome hashes, source states and resolution times.
+  Local `operation_sequence` values prove call ordering within this object: a
+  completed resolution may train a later issuance at the same timestamp, whereas
+  a matured but unaccounted target cannot. This is stronger offline accounting
+  information than retrospective replay's timestamp-only maturity convention,
+  but it is not an independently verified live persistence acknowledgement.
+- `resolve()` accounts matured targets once in target-time order. Outcomes use
+  only snapshots captured by each target; later delivery cannot repair a missing
+  outcome. Targets require a source update after issuance. No such update, stale,
+  missing or conflicting evidence remains explicitly unresolved, never negative
+  training data. The processing clock establishes maturity; collection exactly at
+  a target is unnecessary if a qualifying earlier captured report is still fresh.
+  Returned records are copies. Later contradictions are audit annotations and do
+  not rewrite stored forecasts, outcomes, training or paired scores.
+
+Every forecast, outcome and report says `offline_accounting_only` and
+`live_issuance_verified: false`. The report exports snapshots and private records,
+paired Brier diagnostics, positive/zero outcomes, abstentions, pending targets and
+matured-unaccounted counts. There is no assumed request schedule or inferred
+missed-hour coverage. Source states and overlapping requests remain dependent;
+a small eligible sample or a probability of zero/one is not evidence of calibrated
+accuracy, uninterrupted in-game stock, exact restock timing or purchase success.
+
+Before any live integration, separately authorize and review the arbitrary-request
+durable identity/deduplication and write/readback attestation contract, recovery,
+evidence availability, storage/backup scope and any permissions or automation.
+Do not write these records into the Hawaii pilot's hourly ledger or change its
+immutable record format, permissions or schedule. No cloud action is authorized
+by this offline capability or its tests.
+
+Focused validation: `python -B -m unittest discover -s tests -p test_requested_forecast.py`.
