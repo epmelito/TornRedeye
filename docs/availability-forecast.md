@@ -213,3 +213,21 @@ restoration or cloud access. Without newer verified inputs, synthetic tests veri
 software behavior only; actual predictive performance remains unmeasured.
 
 Focused validation: `python -B -m unittest discover -s tests -p test_requested_availability.py`.
+
+## Private requested-time accounting
+
+`tornredeye.requested_forecast.RequestedForecastRun` adds an in-memory operation
+for a selected country/item and an explicitly requested future UTC target. It
+reuses captured evidence and the existing simple baselines, but takes issuance
+from the processing clock instead of accepting retrospective origins. There is
+no fixed horizon, hourly slot, scheduler or cloud adapter. See the
+[requested-time accounting contract](shadow-forecast.md#requested-time-offline-accounting)
+for the API, request identity, outcome ordering and live-integration boundary.
+
+Unlike retrospective replay's strict target-before-origin training convention,
+this operation records completed outcome-accounting calls. Only those outcomes
+can train subsequent decisions, including operations ordered at an equal clock
+timestamp. Both interfaces predict positive source-reported stock, preserve
+unresolved outcomes and abstain when empirical training is unavailable; neither
+establishes successful purchasing or calibrated live accuracy. The frozen
+historical evaluator and active Hawaii pilot remain unchanged.
