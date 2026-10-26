@@ -10,8 +10,11 @@ Issue #49 and its frozen hourly retrospective evaluation remain unchanged.
 
 ## Core contract
 
-- Construct a run for a country/item (default `haw`/`1485`). Production-clock
-  semantics use UTC now; inject a clock only for deterministic offline exercises.
+- Construct a run with explicit `country` and `item_id` keyword arguments for the
+  selected pair. `OfflineShadowRun` retains `haw`/`1485` as compatibility defaults
+  for the original experiment; they do not restrict supported selections or set
+  product defaults. Production-clock semantics use UTC now; inject a clock only
+  for deterministic offline exercises.
 - `observe(history, attempts=...)` captures a cumulative, already validated
   stock-history report and optional normalized-attempt index, as accepted by
   [the offline baseline](availability-forecast.md). Future retrievals, simultaneous
@@ -157,6 +160,9 @@ the frozen historical evaluator, or the AWS pilot's hourly identities and record
 It has no provider access, storage adapter, scheduler, persistence/restart guarantee
 or interface for importing historical forecasts as issued decisions.
 
+The following example selects Hawaii Shark Fin; `country`, `item_id` and the
+freshness limit are required caller choices for `RequestedForecastRun`.
+
 ```python
 from datetime import datetime, timedelta, timezone
 from tornredeye.requested_forecast import RequestedForecastRun
@@ -177,9 +183,9 @@ The operation does not independently verify raw archives. Retain original privat
 history and evidence matching the snapshot's input digest; captured normalized
 rows preserve evidence keys, original retrieval/source timestamps and issues.
 The clock defaults to UTC now; inject fake clocks only for deterministic offline
-exercises. Japan Xanax (`jap`/`206`) uses the same class with a separate run and
-training history. The example horizon and freshness limit are caller choices,
-not universal product settings.
+exercises. Other selections, such as Japan Xanax (`jap`/`206`), use the same class
+with a separate run and training history. The example horizon and freshness limit
+are caller choices, not universal product settings.
 
 - `observe` captures cumulative evidence at its processing-clock time. Earlier
   source/retrieval timestamps do not establish earlier downstream availability.
@@ -252,6 +258,9 @@ change or change to the active Hawaii pilot. Its supported operations are
 consumer's immutable storage/evidence primitives, not its hourly `run()` protocol.
 Passing fake storage proves software behavior, not actual prospective performance.
 
+The following synthetic example selects Hawaii Shark Fin explicitly; the adapter
+requires `country` and `item_id` for each selected pair.
+
 ```python
 from tornredeye.requested_measurement import RequestedMeasurement
 
@@ -264,8 +273,9 @@ outcomes = run.resolve()
 report = run.report()
 ```
 
-Use `jap`/`206` with the same implementation and independent training. An epoch
-can contain both items; request identities include country/item and request ID.
+Other country/item pairs, such as Japan Xanax (`jap`/`206`), use the same
+implementation with independent training. An epoch can contain multiple pairs;
+request identities include country/item and request ID.
 Requested horizons share training within each item, with one contribution per
 eligible target source timestamp. Methods/version IDs match `RequestedForecastRun`.
 The unsmoothed empirical probability and persistence behavior are unchanged;

@@ -61,7 +61,7 @@ for (const page of pages) {
   assert.equal(nodes.publication.text(), "Publication time unavailable");
   assert.throws(() => app.render({ schema_version: 2 }));
 }
-assert.match(html["index.html"], /stock availability.*Japan.*YATA.*Torn/);
+assert.match(html["index.html"], /stock observations across countries and items.*YATA.*Torn/);
 assert.doesNotMatch(html["index.html"], /id="activity"|id="freshness"/);
 assert.doesNotMatch(html["diagnostics.html"], /id="usage"|id="monitoring"|id="cost"/);
 assert.match(html["usage.html"], /Infrastructure &amp; Usage/);

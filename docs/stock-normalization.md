@@ -47,8 +47,9 @@ validation. Complete validation never proves complete coverage or freshness.
 Individual country/item eligibility is evaluated separately by the reader.
 
 The existing YATA acquisition pipeline and deterministic payload parser remain
-source adapters. The observation contract has no Japan fields, YATA-specific
-format name, pilot envelope, provider registry or speculative provider framework.
+source adapters. The observation contract has no country-specific fields,
+YATA-specific format name, pilot envelope, provider registry or speculative
+provider framework.
 Raw metadata retains lineage, attempt identity, original retrieval/source locator,
 HTTP and acquisition status, and raw/context SHA-256 digests. Detailed acquisition
 diagnostics and response headers live only in the canonical attempt document, keeping raw user

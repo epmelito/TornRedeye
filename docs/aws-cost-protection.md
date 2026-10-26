@@ -318,7 +318,8 @@ and recurring backup activation remain separately authorized operations.
 
 - Export every object in the declared immutable operational evidence/forecast prefixes, including malformed, missing,
   failure, empty-body, full foreign-market payload and raw-only partial writes.
-  Do not filter to observed status, latest records or Japan Xanax stock rows.
+  Do not filter to observed status, latest records or a selected country/item's
+  stock rows.
   A normalized record without raw evidence can be legitimate. Preserve exact
   keys/bytes, ContentType and all raw provenance metadata; normalized JSON links
   include collection ID, retrieval/source/export timestamps, raw hash/length and

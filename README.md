@@ -30,7 +30,7 @@ flowchart TD
     history --> publisher["Hourly Lambda snapshot publisher"]
     monitoring --> publisher
     publisher --> dashboard["CloudFront: public operations dashboard"]
-    history --> shadow["Independent private Hawaii Shark Fin shadow consumer"]
+    history --> shadow["Independent private hourly shadow pilot"]
     shadow --> forecasts["Private S3: immutable forecasts and outcomes"]
     forecasts --> backup
     local["Selected local evidence"] --> analysis["Offline normalization, history and baseline analysis"]
@@ -76,9 +76,11 @@ backups verify uploaded archives and payload hashes by reading them back.
   Historical evidence retains its original bytes and provenance separately from
   the operational lineage; operational readers do not rewrite it or use historical
   labels to train current forecasts.
-- **Experimental forecasting:** offline empirical/persistence comparison and a
-  private 60-minute Hawaii Shark Fin shadow consumer. Its AWS definition defaults
-  to disabled. Predictions are not validated purchasing or travel advice.
+- **Experimental forecasting:** offline empirical/persistence comparison for a
+  selected country/item and private requested-time accounting. The separate
+  hourly shadow pilot retains its Hawaii Shark Fin selection and 60-minute
+  horizon; its AWS definition defaults to disabled. Predictions are not validated
+  purchasing or travel advice.
 - **Planned product capabilities:** broader stock intelligence, historical trends,
   adaptive forecasting across country/item pairs and availability at requested
   times (including travel arrival) are described in the [roadmap](docs/roadmap.md).

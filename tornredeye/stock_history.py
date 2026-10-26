@@ -264,8 +264,8 @@ def analyze(directory, *, country: str, item_id: int):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", help="local subset containing objects/<key-hash>.json and .bin")
-    parser.add_argument("--country", required=True, help="country key, e.g. haw")
-    parser.add_argument("--item-id", required=True, type=int, help="positive item ID, e.g. 1485")
+    parser.add_argument("--country", required=True, help="source country key")
+    parser.add_argument("--item-id", required=True, type=int, help="positive item ID")
     args = parser.parse_args(argv)
     if not args.country.strip() or args.item_id < 1:
         parser.error("country must be nonempty and item ID must be positive")
