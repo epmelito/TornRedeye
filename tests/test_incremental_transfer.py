@@ -112,6 +112,26 @@ class TransferTests(unittest.TestCase):
         with self.assertRaises(transfer.TransferError):
             transfer.restore_batch(archive,proof,directory=restored)
 
+    def test_requested_measurement_records_round_trip_without_new_backup_architecture(self):
+        keys = [FORECAST_PREFIX + "requested-test/requests/" + "a" * 64 + "/" + kind + ".json"
+                for kind in ("forecast", "ack", "outcome")]
+        for key in keys:
+            self.s3.add(key, b'{"private":"measurement"}')
+        result = self.run_transfer()
+        self.assertTrue(result["complete"], result)
+        blob = next(k for k in self.azure.data if k.endswith(".zip"))
+        archive = self.parent / "requested.zip"
+        archive.write_bytes(self.azure.data[blob])
+        proof = transfer.decode(self.azure.data[blob + ".verified.json"])
+        restored = self.parent / "isolated-requested"
+        self.assertEqual(transfer.restore_batch(archive, proof, directory=restored)["verified_objects"], 3)
+        for key in keys:
+            self.assertEqual((restored / "objects" / (backup._key_id(key) + ".bin")).read_bytes(),
+                             self.s3.objects[key]["body"])
+        before = dict(self.azure.data)
+        self.assertTrue(self.run_transfer()["complete"])
+        self.assertEqual(self.azure.data, before)
+
     def test_lost_ack_and_interrupted_completion_recover_without_double_transfer(self):
         self.s3.add(RAW,b"raw")
         def interrupt(name):

@@ -67,7 +67,7 @@ class Consumer:
             raise RuntimeError("insufficient execution budget; no partial scan accepted")
         return value
 
-    def get(self, key, *, etag=None, optional=False):
+    def get(self, key, *, etag=None, optional=False, max_bytes=None):
         self.now()
         if optional:
             page = self.s3.list_objects_v2(Bucket=self.bucket, Prefix=key, MaxKeys=1)
@@ -86,7 +86,9 @@ class Consumer:
             raise
         stream = response["Body"]
         try:
-            body = stream.read()
+            body = stream.read() if max_bytes is None else stream.read(max_bytes + 1)
+            if max_bytes is not None and len(body) > max_bytes:
+                raise ValueError("object exceeds read bound")
         finally:
             stream.close()
         modified = response["LastModified"]
@@ -140,7 +142,7 @@ class Consumer:
             raise
         return True
 
-    def evidence(self, cutoff):
+    def evidence(self, cutoff, *, country="haw", item_id=1485):
         """Completely list the retrieval-hour partitions needed by the fixed window.
 
         Retrieval partitions bound discovery, never establish availability. Only
@@ -193,7 +195,7 @@ class Consumer:
                         if status == "success":
                             normalized = json.loads(normalize_export(
                                 body, retrieved, raw_evidence_id=f"s3://{self.bucket}/{key}", http_status=int(http)))
-                            fields = normalized_target_fields(normalized, retrieved, "haw", 1485)
+                            fields = normalized_target_fields(normalized, retrieved, country, item_id)
                             row = {"at": retrieved, "key": key, "source": fields["source_timestamp"],
                                    "quantity": fields["quantity"], "issues": fields["issues"]}
                         else:
