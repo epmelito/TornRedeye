@@ -20,6 +20,23 @@ Mutable `forecast-state/` heads/leases and source polling control are excluded
 from automatic recovery. Unknown key formats fail; no status-based payload filter
 or historical-prefix fallback exists. Both complete prefix inventories are required.
 
+Issue #68 adds immutable request-addressed records within the same forecast root:
+`forecasts/live-v1/records/requested-<name>/requests/<64-lowercase-hex>/{forecast,ack,outcome}.json`.
+Hourly pilot keys remain unchanged. The additional grammar accepts only these
+three record kinds; it does not admit arbitrary keys or mutable state. The anchor
+version, pinned scope, transfer verification and restoration architecture are
+unchanged. Deploy the reviewed key validator to the backup runner **before** any
+separately authorized new-format writes: an older runner rejects unknown paths
+and fails coverage rather than silently omitting them. Fake round-trip tests
+verify retained bytes and receipts, not actual Azure backup execution.
+
+Requested measurement reconstructs from immutable primary records without a
+mutable head. A recovered copy remains audit evidence; new S3 storage times do
+not attest original live availability. Do not restore into an active campaign or
+resume scoring from rewritten storage times. A new explicitly named cold campaign
+is required after disaster recovery; preserve prior forecasts, acknowledgements,
+outcomes and original receipts for historical audit.
+
 A deterministic version-3 empty-lineage anchor binds bucket, lineage and exact
 scope. It asserts no prior backup coverage and references no historical archive.
 Compute its digest offline for the approved bucket:

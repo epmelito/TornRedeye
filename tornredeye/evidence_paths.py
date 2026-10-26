@@ -57,6 +57,11 @@ def validate_backup_key(key):
     if key.startswith(EVIDENCE_PREFIX):
         evidence_identity(key)
     else:
+        requested = re.fullmatch(re.escape(FORECAST_PREFIX)
+                                 + r"requested-[a-z0-9][a-z0-9-]{0,52}/requests/[0-9a-f]{64}/"
+                                 + r"(forecast|ack|outcome)\.json", key)
+        if requested:
+            return key
         match = re.fullmatch(re.escape(FORECAST_PREFIX)
                              + r"[a-z0-9][a-z0-9-]{0,62}/(\d{4}-\d{2}-\d{2}T\d{2})/"
                              + r"(forecast|ack|outcome|checkpoint)\.json", key)

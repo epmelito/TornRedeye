@@ -13,6 +13,47 @@ quality. The public dashboard publisher's enabled state is **not verified** here
 
 This guide does not authorize further cloud access, deployment or schedule changes.
 
+## Requested-time measurement activation boundary
+
+Issue #68's append-only adapter is initially an offline, fake-client integration,
+not an activated prospective experiment. Before any real client or source-storage
+access is used, independently review the implementation and separately authorize:
+
+1. The primary bucket, isolated `requested-<name>` campaign, item cohorts, requested
+   targets, freshness, bounded invocation/accounting plan and private operator
+   attempt log. Do not infer a permanent schedule or product horizon from research
+   examples. Keep cold starts, late writes and unresolved targets in coverage.
+2. Prefix-scoped List/Get on existing evidence and campaign records, and
+   conditional-create-only Put on that campaign's forecast/ack/outcome keys.
+   First inspect whether an existing operator identity already has the required
+   scope; this implementation creates no role or permission. Do not broaden the
+   Hawaii pilot's role, change its epoch or invoke its hourly handler for requests.
+3. Deploy the additive backup key validator before writing new-format objects,
+   preserve the existing backup scope/anchor pin, then verify actual backup and
+   isolated recovery of a bounded sample. That later AWS/Azure work requires its
+   own authorization; local fake clients establish no backup attestation.
+4. Verify actual primary-store write/readback receipts before each target and
+   immutable outcome readback before later training. Compare per-item/horizon
+   paired scores only after genuine issued and subsequently accounted observations
+   exist. A small sample, fake-client score or retrospective replay proves no live
+   usefulness. Outcome evidence is S3-available by target, not necessarily read by
+   the consumer then; it does not establish purchasing success.
+
+Operational impact is additional S3 lists/conditional reads and up to three
+immutable objects per persisted request, plus existing backup inventory/transfer
+work. Full campaign reconstruction grows with retained records and fails at
+explicit limits. No extra YATA requests or collector/polling changes are needed.
+Estimate a bounded request/accounting budget before activation; exact costs and
+existing permission coverage have not been measured by offline tests. Do not
+introduce a service, schedule or mutable coordinator merely to run this adapter.
+
+Rollback means stop operator invocations and any separately authorized automation;
+retain immutable records and backup coverage. Keep the additive backup validator
+while these records exist, since reverting it would reject their keys. Never
+delete records to manufacture a clean restart, reuse an active/restored epoch, or
+affect the independent Hawaii pilot. Account for interrupted/pending requests
+explicitly before making a separate continuation/capacity decision.
+
 ## Offline validation
 
 Use Python 3.11+; deployed functions retain Python 3.13 and the existing boto3 SDK.

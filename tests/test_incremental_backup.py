@@ -26,6 +26,18 @@ class CatalogTests(unittest.TestCase):
             with self.assertRaises(inc.CatalogError):inc.key_parts(key)
         self.assertEqual(inc.source_key(*inc.key_parts(RAW)),RAW)
 
+    def test_requested_measurement_keys_preserve_strict_backup_scope(self):
+        root = backup.PREFIXES[1] + "requested-test/requests/" + "a" * 64 + "/"
+        for kind in ("forecast", "ack", "outcome"):
+            key = root + kind + ".json"
+            self.assertEqual(inc.source_key(*inc.key_parts(key)), key)
+        for key in (root + "head.json", root + "checkpoint.json",
+                    root.replace("a" * 64, "short") + "forecast.json",
+                    root.replace("requested-test", "epoch-1") + "forecast.json",
+                    root.replace("/requests/", "/other/") + "forecast.json"):
+            with self.subTest(key=key), self.assertRaises(inc.CatalogError):
+                inc.key_parts(key)
+
     def test_incomplete_pages_and_unknown_objects_prevent_global_completion(self):
         pages={p:[{"request_token":None,"next_token":None,"objects":[]}] for p in backup.PREFIXES}
         for index, change in enumerate((lambda p:p.pop(backup.PREFIXES[1]), lambda p:p[backup.PREFIXES[0]][0].update(next_token="lost"), lambda p:p[backup.PREFIXES[0]][0].update(request_token="wrong"))):

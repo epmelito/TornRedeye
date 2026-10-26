@@ -85,7 +85,9 @@ does not change this pilot's fixed experimental contract.
 The existing hourly minute-02 EventBridge rule is disabled by default. Each run
 uses actual processing time and makes at most one decision in its UTC-hour slot;
 missed slots are never backfilled. A five-minute conditional lease bounds one
-240-second invocation. A reserved slot without a forecast remains failed.
+240-second invocation. If a forecast write never persisted, a same-hour retry
+after lease expiry may still issue using its actual processing time. Once that
+hour has passed, an absent reserved forecast is counted as failed, never backfilled.
 
 Inputs list only retrieval-hour prefixes intersecting `[cutoff - 10 minutes, cutoff]`
 under `evidence/live-v1/`, normally one or two hours. All pages must complete;
@@ -239,3 +241,148 @@ immutable record format, permissions or schedule. No cloud action is authorized
 by this offline capability or its tests.
 
 Focused validation: `python -B -m unittest discover -s tests -p test_requested_forecast.py`.
+
+## Append-only requested-time measurement integration
+
+`RequestedMeasurement` in `tornredeye.requested_measurement` is an operator-invoked
+storage adapter tested offline with injected fake S3 clients and clocks. There is
+no CLI that creates an AWS client, Lambda entry point, deployment, schedule, IAM
+change or change to the active Hawaii pilot. Its supported operations are
+`issue(target_utc, request_id=...)`, `resolve()` and `report()`; it reuses the
+consumer's immutable storage/evidence primitives, not its hourly `run()` protocol.
+Passing fake storage proves software behavior, not actual prospective performance.
+
+```python
+from tornredeye.requested_measurement import RequestedMeasurement
+
+run = RequestedMeasurement(fake_s3, "synthetic-private-bucket",
+                           epoch="requested-example", country="haw", item_id=1485,
+                           maximum_source_age_seconds=300, clock=fake_clock)
+forecast = run.issue(future_target_utc, request_id="example-request")
+# advance the fake clock and add source objects as they become persisted
+outcomes = run.resolve()
+report = run.report()
+```
+
+Use `jap`/`206` with the same implementation and independent training. An epoch
+can contain both items; request identities include country/item and request ID.
+Requested horizons share training within each item, with one contribution per
+eligible target source timestamp. Methods/version IDs match `RequestedForecastRun`.
+The unsmoothed empirical probability and persistence behavior are unchanged;
+always-empty probability zero is only a comparator on the same scored outcomes.
+Cold-start outcomes may seed later training even though the empirical forecast
+abstained. No historical forecast/outcome import seeds training.
+
+### Identity and chronological proof
+
+The isolated epoch must match `requested-<name>` (at most 63 characters total).
+Keys are
+`forecasts/live-v1/records/<epoch>/requests/<identity-sha256>/{forecast,ack,outcome}.json`.
+The hash binds country, item ID and the exact caller request ID, with the epoch
+providing campaign isolation. Target time is deliberately not part of that key:
+reusing the ID with a different target or freshness fails instead of silently
+creating another prediction. Forecast hashes additionally bind actual issuance,
+target, methods, probabilities, inputs and training provenance. Requests may have
+multiple targets per hour, each with a distinct ID. No raw request ID enters the
+storage path, and the active pilot's epoch/hour keys are never written.
+
+Issuance happens after complete training reconstruction and evidence reads. The
+record preserves actual decision time, requested target and actual horizon; scans
+do not backdate issuance or move the requested target. Processing latency can make
+the actual horizon differ from a caller's nominal research offset. Without a
+committed request plan, reports retain exact actual-horizon groups.
+
+For predeclared research cohorts, retain a private JSON list of entries containing
+`country`, `item_id`, `target_utc` (canonical UTC with six fractional digits and
+`Z`) and an arbitrary `horizon_cohort` label. Before issuance, derive each request
+ID with `planned_request_id(plan, index)` and pass that ID to `issue()` with the
+entry's target. The ID commits the complete plan's canonical JSON hash and entry
+index in the existing immutable forecast record; no new persisted fields are
+needed. Keep the exact plan for retries and reproducible reporting. Labels such
+as `ten-minute` and `sixty-minute` describe research intent, not rounded elapsed
+times or fixed product horizons. Do not select plan entries based on outcomes.
+
+`report(request_plan=plan)` verifies these IDs and item/target associations and
+returns `cohorts`, the plan and its SHA-256. Group keys are `cohort:<label>`;
+legacy requests without a plan commitment remain visible under `unplanned`.
+A different committed plan fails visibly rather than reassigning cohorts. Existing
+uncommitted forecasts cannot retrospectively acquire a verified cohort. All
+stored issuance, target and actual-horizon values remain unchanged in the audit
+records. Cohort aggregation does not remove dependence from overlapping targets.
+Freshness is required explicitly, currently supported from 0 through 300 seconds
+within the existing ten-minute evidence discovery window. Use a new campaign for
+a different freshness setting within an item; do not pool incompatible settings.
+
+Every record is created conditionally and read back with matching bytes/digest.
+The immutable acknowledgement retains the original forecast receipt and actual
+readback time. Scoring requires both that readback and conservative S3 persistence
+bounds for forecast and acknowledgement to precede the target. A payload's
+`status: verified` alone is insufficient. A duplicate retrieves original bytes;
+it does not recalculate probabilities. A lost forecast-write response can recover
+before target. If the original acknowledgement persisted before target, its
+receipt can be recovered after target. Without durable pre-target readback proof,
+a later recovery remains ineligible, even if the forecast object was written
+earlier. A never-persisted request cannot be reconstructed after its target.
+Conflicting concurrent creates fail visibly; retry retrieves the winning record.
+
+### Complete reconstruction without mutable state
+
+Each operation lists every page under its campaign's request prefix. Only records
+whose original S3 LastModified plus one second is at or before the operation's
+cutoff enter that reconstruction. This freezes a conservative, complete input set
+under the existing append-only primary-storage contract: later appends cannot
+become eligible at that cutoff. There is no mutable checkpoint, lease or rolling
+history truncation. It relies on primary S3 listing/read consistency and retained
+immutable objects; overwrites, deletes and restoring into an active epoch violate
+the contract. Conditional reads detect captured-object changes, not a privileged
+writer's ability to forge historical provenance.
+
+The boundary second is explicitly deferred, even when a preceding `resolve()`
+completed at the same wall-clock reading. Its outcome becomes eligible at a
+later cutoff after the conservative persistence bound, and must be successfully
+read back before a later decision. This is an intentional storage-availability
+constraint, not the in-memory object's operation-sequence proof. Missing outcomes
+are never synthesized from matured targets during issuance. `resolve()` is the
+separate accounting operation; persisted outcomes recovered by readback can train
+later forecasts without double counting. Training retains outcome read receipts,
+including actual read times, alongside source-time identities.
+
+Limits are 3,000 listed ledger objects, 32 MiB total listed ledger bytes, 1 MiB per
+ledger object, and the consumer's 240-second/remaining-budget checks. Oversized objects, unknown
+keys, incomplete/repeated pagination, integrity failures or budget exhaustion
+abort rather than training from a subset. These bound the initial measurement
+campaign; routine work still grows with its full retained history. An exhausted
+campaign requires a reviewed capacity/continuation decision, not silent rollover
+or dropping pending outcomes. No lease/checkpoint alternative is implemented.
+Raw source evidence has a separate `maximum_evidence_bytes` read budget per object,
+defaulting to the existing incremental backup's 16 MiB operational limit. It can
+be increased explicitly for larger valid responses; this is a resource bound,
+not a YATA size-validity contract. Exceeding it aborts without truncating evidence
+or issuing a forecast. The collector and active pilot are unchanged.
+
+Outcomes are immutable and associated with exact forecast hashes. Accounting may
+read evidence later, but only original source evidence demonstrably persisted in
+S3 by the target supplies its label. This is S3-available source stock, **not**
+proof of a consumer read at target. Late persistence cannot repair missing labels;
+source age, post-issuance source updates, bounded carry, conflicts and failed
+attempts retain their existing meanings. An unresolved outcome is final audit
+evidence, not zero stock. Later discoveries do not rewrite forecasts or outcomes.
+
+Reporting reconstructs recorded coverage by item and either committed research
+cohort or exact actual horizon, including origin/forecast/outcome statuses,
+cold-start abstentions, pending and
+matured-unaccounted requests, issuance ineligibility, resolved positive/zero counts,
+and matched empirical/persistence/always-empty Brier scores. It also returns the
+stored records and inventory exclusions for private audit. Empty common samples
+have null scores. Coverage is of persisted requests only: failures before a first
+write and requests never submitted require a separately retained operator attempt
+log; the adapter does not invent a denominator. Dependent source states and
+overlapping outcomes do not establish independent validation, calibrated
+probabilities, in-game availability or successful purchasing.
+
+Offline checks: `test_requested_measurement.py` exercises fake-client issuance,
+restart, late acknowledgements, training cutoffs and immutable outcomes. The
+existing shadow/requested-core tests protect the active experiments. Backup key
+validation and fake backup/restore tests cover the additive immutable layout.
+See [backup scope](evidence-backup.md#scope-and-trust) and the separately authorized
+[measurement activation boundary](deployment.md#requested-time-measurement-activation-boundary).
