@@ -27,6 +27,21 @@ def properties(name):
     return RESOURCES[name]["Properties"]
 
 
+def heartbeat_states(minutes):
+    """Model settled minute sums in sliding windows, not AWS ingestion timing."""
+    alarm = properties("MissingObservationsAlarm")
+    period = alarm["Metrics"][0]["MetricStat"]["Period"] // 60
+    periods = alarm["EvaluationPeriods"]
+    return {
+        end: sum(
+            sum(value or 0 for value in minutes[end - (index + 1) * period:end - index * period])
+            < alarm["Threshold"]
+            for index in range(periods)
+        ) >= alarm["DatapointsToAlarm"]
+        for end in range(period * periods, len(minutes) + 1)
+    }
+
+
 class InfrastructureTests(unittest.TestCase):
     def test_bucket_is_private_encrypted_and_retained_on_stack_removal_or_replacement(self):
         bucket = RESOURCES["EvidenceBucket"]
@@ -154,26 +169,56 @@ class MonitoringTests(unittest.TestCase):
     def test_heartbeat_window_missing_data_and_recovery_contract(self):
         alarm = properties("MissingObservationsAlarm")
         self.assertEqual(alarm["ComparisonOperator"], "LessThanThreshold")
-        self.assertEqual(alarm["Threshold"], 1)
-        self.assertEqual(alarm["EvaluationPeriods"], 15)
-        self.assertEqual(alarm["DatapointsToAlarm"], 15)
+        self.assertEqual(alarm["Threshold"], 3)
+        self.assertEqual(alarm["EvaluationPeriods"], 6)
+        self.assertEqual(alarm["DatapointsToAlarm"], 3)
         self.assertEqual(alarm["TreatMissingData"], "breaching")
         metric, expression = alarm["Metrics"]
         self.assertEqual(metric["Id"], "observations")
-        self.assertEqual(metric["MetricStat"]["Period"], 60)
+        self.assertEqual(metric["MetricStat"]["Period"], 300)
         self.assertEqual(metric["MetricStat"]["Stat"], "Sum")
         self.assertEqual(metric["MetricStat"]["Metric"]["MetricName"], "PersistedObservations")
         self.assertFalse(metric["ReturnData"])
         self.assertEqual(expression, {
             "Id": "heartbeat", "Expression": "FILL(observations, 0)", "ReturnData": True,
         })
-        # verify the window contract; AWS ingestion/evaluation timing needs a live check
-        def breaches(window):
-            return sum((value or 0) < alarm["Threshold"] for value in window[-15:]) >= alarm["DatapointsToAlarm"]
-        self.assertFalse(breaches([1] + [None] * 14))
-        self.assertTrue(breaches([None] * 15))
-        self.assertTrue(breaches([0] * 15))
-        self.assertFalse(breaches([None] * 15 + [1]))
+
+    def test_heartbeat_distinguishes_healthy_degraded_and_missing_observations(self):
+        for healthy in ([1] * 120, [1, 1, 1, 0, 0] * 24):
+            self.assertFalse(any(heartbeat_states(healthy).values()))
+        for missing in (None, 0):
+            self.assertTrue(all(heartbeat_states([missing] * 120).values()))
+        # half-rate collection leaves three of the six five-minute sums below three
+        self.assertTrue(all(heartbeat_states([1, 0] * 60).values()))
+        self.assertFalse(heartbeat_states([3, 0, 0, 0, 0] * 6)[30])
+        self.assertTrue(heartbeat_states([2, 0, 0, 0, 0] * 6)[30])
+
+    def test_heartbeat_isolated_successes_do_not_clear_sustained_failure(self):
+        for intermittent in (
+            [0] * 19 + [1],
+            [0] * 18 + [1, 1, 1],
+            [100] + [0] * 19,
+        ):
+            states = heartbeat_states([0] * 60 + intermittent * 6)
+            self.assertTrue(all(states.values()))
+
+    def test_heartbeat_outage_and_recovery_use_sliding_minute_boundaries(self):
+        for phase in range(5):
+            with self.subTest(phase=phase):
+                outage = 60 + phase
+                recovery = outage + 60
+                states = heartbeat_states([1] * outage + [0] * 60 + [1] * 60)
+                self.assertFalse(states[outage + 12])
+                self.assertTrue(states[outage + 13])
+                self.assertTrue(states[recovery + 17])
+                self.assertFalse(states[recovery + 18])
+                self.assertEqual(sum(states[t] != states[t - 1] for t in states if t - 1 in states), 2)
+
+    def test_heartbeat_requires_four_adequate_windows_for_recovery(self):
+        adequate = [1, 1, 1, 0, 0]
+        inadequate = [1, 1, 0, 0, 0]
+        self.assertTrue(heartbeat_states(adequate * 3 + inadequate * 3)[30])
+        self.assertFalse(heartbeat_states(adequate * 4 + inadequate * 2)[30])
 
     def test_failure_and_halt_alarms_and_schedule_aware_notification_actions(self):
         errors = properties("CollectionErrorsAlarm")
@@ -197,7 +242,8 @@ class MonitoringTests(unittest.TestCase):
             self.assertIn("MonitoringTopicPolicy", RESOURCES[name]["DependsOn"])
             self.assertEqual(config["ActionsEnabled"], {"Fn::If": ["MonitoringActionsEnabled", True, False]})
             for action in ("AlarmActions", "OKActions"):
-                self.assertEqual(config[action], [{"Ref": "MonitoringTopic"}])
+                expected = [] if name == "CollectionErrorsAlarm" else [{"Ref": "MonitoringTopic"}]
+                self.assertEqual(config[action], expected)
         self.assertEqual(TEMPLATE["Conditions"]["MonitoringActionsEnabled"], {
             "Fn::Equals": [{"Ref": "ScheduleState"}, "ENABLED"],
         })

@@ -405,14 +405,14 @@
           }
         ],
         "ComparisonOperator": "LessThanThreshold",
-        "Threshold": 1,
-        "EvaluationPeriods": 15,
-        "DatapointsToAlarm": 15,
+        "Threshold": 3,
+        "EvaluationPeriods": 6,
+        "DatapointsToAlarm": 3,
         "TreatMissingData": "breaching",
         "AlarmName": {
           "Fn::Sub": "${AWS::StackName}-missing-observations"
         },
-        "AlarmDescription": "No successfully persisted observed result in approximately 15 minutes. Check logs, S3 evidence, schedule and guard; HTTP success and persisted missing/error results do not count.",
+        "AlarmDescription": "Fewer than 3 successfully persisted observed results in at least 3 of 6 five-minute windows. Recovery requires at least 4 windows with 3 or more results; isolated successes do not clear a sustained outage. Check logs, evidence, schedule and guard.",
         "Metrics": [
           {
             "Id": "observations",
@@ -424,7 +424,7 @@
                 },
                 "MetricName": "PersistedObservations"
               },
-              "Period": 60,
+              "Period": 300,
               "Stat": "Sum"
             }
           },
@@ -446,16 +446,8 @@
             false
           ]
         },
-        "AlarmActions": [
-          {
-            "Ref": "MonitoringTopic"
-          }
-        ],
-        "OKActions": [
-          {
-            "Ref": "MonitoringTopic"
-          }
-        ],
+        "AlarmActions": [],
+        "OKActions": [],
         "ComparisonOperator": "GreaterThanOrEqualToThreshold",
         "Threshold": 1,
         "EvaluationPeriods": 6,
@@ -464,7 +456,7 @@
         "AlarmName": {
           "Fn::Sub": "${AWS::StackName}-collection-errors"
         },
-        "AlarmDescription": "Lambda errors in at least 3 of 6 one-minute periods, including collection, configuration, control, persistence or runtime timeout. OK means the error threshold no longer breaches, not proof of observation recovery.",
+        "AlarmDescription": "Diagnostic only; no direct notifications. Lambda errors in at least 3 of 6 one-minute periods, including collection, configuration, control, persistence or runtime timeout. OK is not proof of observation recovery.",
         "Namespace": "AWS/Lambda",
         "MetricName": "Errors",
         "Dimensions": [
