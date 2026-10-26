@@ -27,8 +27,7 @@ for implemented capabilities and the linked contracts for experimental work.
   and constraints and surface actionable changes with understandable reasoning.
 
 Statistical baselines come before more complex methods. Machine learning remains
-an optional future improvement requiring evidence of useful gains. Hawaii Shark
-Fin is the initial research case, not a permanent product or architectural limit.
+an optional future improvement requiring evidence of useful gains.
 The implemented private shadow consumer is experimental; broader forecasting,
 recommendations, travel planning, personalization and alerts remain planned.
 
@@ -70,7 +69,7 @@ before choosing a method; insufficient evidence can justify deferring implementa
 
 ## Delivery milestones
 
-TornRedeye advances toward useful, evidence-backed stock availability forecasts through delivery milestones, not fixed dates or arbitrary sample-size thresholds. Hawaii Shark Fin is the initial research case, not a permanent architectural boundary. Preserve evidence continuity and backup through separately authorized operational changes.
+TornRedeye advances toward useful, evidence-backed stock availability forecasts through delivery milestones, not fixed dates or arbitrary sample-size thresholds. Milestones apply across country/item pairs. Preserve evidence continuity and backup through separately authorized operational changes.
 
 1. **Evidence foundation.** Collect, preserve, verify, and prepare historical stock observations. **Exit:** Traceable evidence and reusable stock-history processing are available.
 

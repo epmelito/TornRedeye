@@ -1,10 +1,9 @@
 # Local stock history
 
 `tornredeye.stock_history` reads a caller-selected local subset of retained source
-exports for a selected country and item. Hawaii Shark Fin (`haw`, item ID `1485`)
-is the primary example. It prints a deterministic JSON report
-to standard output. It never changes evidence, contacts a cloud service, or
-downloads history. Use Python 3.11 or newer.
+exports for an explicitly selected country and item. It prints a deterministic
+JSON report to standard output. It never changes evidence, contacts a cloud
+service, or downloads history. Use Python 3.11 or newer.
 
 ## Input and command
 
@@ -28,7 +27,8 @@ For sealed historical evidence, use the preserved archive interpretation code;
 these operational tools do not translate old identities. Raw objects contain the
 complete source export; country/item selection is independent of storage naming.
 
-From the repository root in PowerShell:
+For example, select Hawaii Shark Fin (`haw`, item ID `1485`) from the repository
+root in PowerShell:
 
 ```powershell
 . ./.chatgpt/powershell-helpers.ps1
@@ -39,7 +39,9 @@ Invoke-NativeCommand python @('-B', '-m', 'tornredeye.stock_history', 'C:\privat
 positive integer item ID. For example, `--country jap --item-id 206` selects
 Japan Xanax from the same export format. Each report identifies the selected
 country/item ID; names remain source-reported on each observation. The Python API
-is `analyze(directory, country="haw", item_id=1485)`. `--help` describes the arguments.
+signature is `analyze(directory, *, country, item_id)`: both selection arguments
+are required keyword-only arguments, with no country/item defaults. `--help`
+describes the CLI arguments.
 Input contains private evidence identities and
 metadata; the output retains them and is a local report, not public dashboard data.
 Exit 0 means a report was produced, including any explicit row issues/warnings;
@@ -135,11 +137,12 @@ sellbacks, source latency and missing evidence limit interpretation. The
 can bring items abroad and sell them; quantity increases alone cannot identify
 their cause.
 
-Hawaii Shark Fin (`--country haw --item-id 1485`) and Japan Xanax
-(`--country jap --item-id 206`) use the same analysis. Run both against the same
-explicitly selected, verified export subset and retain its identities, endpoints,
-quality diagnostics and private JSON outputs to reproduce a comparison. One day
-cannot establish a reliable long-term replenishment distribution. The October 21,
+For example, Hawaii Shark Fin (`--country haw --item-id 1485`) and Japan Xanax
+(`--country jap --item-id 206`) use the same analysis. To compare them, run each
+against the same explicitly selected, verified export subset and retain its
+identities, endpoints, quality diagnostics and private JSON outputs to reproduce
+a comparison. One day cannot establish a reliable long-term replenishment
+distribution. The October 21,
 2026 Traveling 2.0 changes are possible context for changing purchasing/depletion
 patterns, not evidence of causation. No regime-change model or forecasting method
 is fitted here. Evaluate any later timing/depletion method on subsequently

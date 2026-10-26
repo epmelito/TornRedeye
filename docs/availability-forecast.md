@@ -2,7 +2,7 @@
 
 `tornredeye.availability_forecast` compares an expanding historical availability
 probability with last observed state persistence. The operation selects a country
-and item; Hawaii Shark Fin (`haw`, `1485`) is the initial research case.
+and item explicitly, with no country/item defaults.
 Python 3.11 and the standard library suffice. The command reads existing history,
 prints deterministic private JSON, and performs no network or archive operations.
 
@@ -34,7 +34,8 @@ context and history warnings fail explicitly. Missing quantities and invalid
 source timestamps remain unavailable observations. Do not manufacture missing
 context or substitute file modification times.
 
-From the repository root in PowerShell:
+For example, select Hawaii Shark Fin (`haw`, `1485`) from the repository root in
+PowerShell:
 
 ```powershell
 . ./.chatgpt/powershell-helpers.ps1
@@ -47,6 +48,10 @@ produced, even when insufficient evidence leaves probabilities/scores null.
 Exit 2 indicates invalid or unreadable input; no substitute forecast is emitted.
 
 ## Frozen observation and target rules
+
+These rules preserve Issue #49's experiment, whose initial research case was
+Hawaii Shark Fin. They apply to the caller-selected country/item; the fixed
+hourly grid and horizon are experimental settings, not universal product rules.
 
 - Origins are fixed hourly UTC boundaries, from the ceiling of the first retained
   retrieval through the last retained retrieval. Missing hours remain visible.
@@ -140,19 +145,22 @@ normalized-attempt contract. Requests are a nonempty JSON list, for example:
 ]
 ```
 
-These are example research requests, not claims about available evidence. From
-the repository root, with already-local private inputs:
+These are example research requests, not claims about available evidence. For
+example, select Hawaii Shark Fin from the repository root, with already-local
+private inputs:
 
 ```powershell
 . ./.chatgpt/powershell-helpers.ps1
 Invoke-NativeCommand python @('-B', '-m', 'tornredeye.requested_availability', 'C:\private\history.json', 'C:\private\requests.json', '--country', 'haw', '--item-id', '1485', '--maximum-source-age-seconds', '300')
 ```
 
-Use the same requests for Japan (`jap`/`206`); do not pool item histories. Repeat
-with 180 seconds for exploratory sensitivity. The 10/60-minute offsets and
-300/180-second limits are research settings, not production defaults. Comparisons
-between freshness settings may have different eligibility; inspect coverage and
-match individual pairs before interpreting score differences across settings.
+For a comparison across country/item pairs, use the same requests with separate
+matching histories; Japan Xanax (`jap`/`206`) is another example. Do not pool item
+histories. For example, repeat with 180 seconds for exploratory sensitivity. The
+10/60-minute offsets and 300/180-second limits are research settings, not production
+defaults. Comparisons between freshness settings may have different eligibility;
+inspect coverage and match individual pairs before interpreting score differences
+across settings.
 
 - By default, availability is proxied by original retrieval time, explicitly
   labelled `retrospective_retrieval_time_proxy`. Optional `--available-at` supplies
