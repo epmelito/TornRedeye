@@ -20,23 +20,39 @@ keep their existing behavior.
 | Signal | Meaning and evaluation |
 | --- | --- |
 | `PersistedObservations` | Count `persisted collection_id=` only with `acquisition_status=success` and a nonzero `usable_observations` count. Emitted after both evidence writes or matching retries complete. Valid item zeros and cached exports count; raw-only writes, skipped runs, acquisition failures and exports without usable item fields do not. This is an acquisition/validation heartbeat, not proof that every country is fresh or available. |
-| Missing observations alarm | Sum per minute, `FILL(observations, 0)`, below 1 for 15 of 15 minutes. Silence, missing metrics and explicit zeros breach. One observation in the evaluation window clears the alarm. Detects roughly 15 minutes without persisted observations, including failed schedule delivery or stopped logging. |
-| Collection errors alarm | Built-in `AWS/Lambda Errors`, scoped to the collector function, sum >= 1 in at least 3 of 6 one-minute periods. Requires three breaching minutes; three errors confined to one minute do not trigger it. Includes propagated source, configuration, control, persistence and release errors, and runtime timeouts. Missing data is nonbreaching. |
+| Missing observations alarm | Five-minute Sum of `PersistedObservations`, `FILL(observations, 0)`, below 3 in at least 3 of 6 evaluated windows. Detects sustained insufficient successful persistence, including complete silence. OK requires at least 4 of 6 windows with 3 or more results each. An isolated successful observation does not clear a prolonged outage. This is a count of matching log events, not a per-acquisition success rate. |
+| Collection errors alarm | Diagnostic only, with empty ALARM and OK action lists. Built-in `AWS/Lambda Errors`, scoped to the collector function, sum >= 1 in at least 3 of 6 one-minute periods. Requires three breaching minutes; three errors confined to one minute do not trigger it. Includes propagated source, configuration, control, persistence and release errors, and runtime timeouts. Missing data is nonbreaching. Evaluation, state history and console visibility remain enabled. |
 | `PollingHalts` and halt alarm | Count `collection skipped` logs with `reason=halted:`; sum >= 1 in one minute. Covers access/rate halts and abandoned attempts. Ordinary spacing, cooldown, conflict and in-flight skips do not count. Missing data is nonbreaching. A restriction-setting invocation already raises a Lambda error; subsequent halted skips keep this alarm active. |
 
-On October 25, 2026, alternating source failures (HTTP 502 responses and read
-timeouts) caused repeated ALARM/OK notifications under the 3-of-5 configuration:
-successive five-minute windows contained three, then two breaching minutes.
-With 3-of-6, both `[1,0,1,0,1,0]` and `[0,1,0,1,0,1]` meet the threshold,
-so sustained alternating errors remain alarming under the configured window
-logic. Fewer than three breaching minutes allows recovery. These offline window
-checks do not simulate CloudWatch's full evaluation or delayed metric ingestion;
-actual transition timing requires separately authorized live verification.
+The earlier 3-of-6 error policy handled perfectly alternating failures, but
+irregular failures, cooldown skips and short successful bursts still change its
+state frequently. It is retained for diagnosis rather than direct email. The old
+15-of-15 one-minute heartbeat cleared after one success, so occasional acquisitions
+could produce repeated recovery emails during a severe upstream outage.
+Removing error email is a deliberate tradeoff: error-only problems, including
+some persistence failures, no longer notify while successful persistence remains
+adequate. Inspect diagnostic errors and original evidence during investigation;
+the heartbeat is not an independent guarantee that failure evidence was retained.
+
+The heartbeat now evaluates a 30-minute history of five-minute counts. A window
+with 0, 1 or 2 results breaches; 3 or more does not. At least four adequate windows
+are needed for recovery, requiring successes distributed across those windows.
+One burst cannot make four windows adequate at the same evaluation. The minimum
+is 12 matching events across four windows, not proof of 12 unique acquisitions.
+With a preceding steady one-result-per-minute stream, the settled-data model
+alarms 13 minutes into complete silence and recovers after 18 minutes of that
+steady stream returning. Other histories and delayed delivery change these times.
+This deliberately detects low successful persistence as well as total absence;
+half-rate alternating success is alarming, while three successes in each five
+minutes is not. It does not prove that each country is fresh or forecast-ready.
 
 Metric filters default to zero in minutes with other log events; without events
 they publish nothing. The heartbeat fills these gaps explicitly to avoid old
-positive samples extending the evaluation window. Minute boundaries, service
-evaluation and log delivery latency prevent an exact 900-second guarantee.
+positive samples extending the evaluation window. Missing and explicit zero
+windows are deficient by alarm policy; missing results remain unknown elsewhere.
+CloudWatch's default window slides at each minute evaluation; five-minute periods
+must not be modeled only at fixed five-minute clock boundaries. Service
+evaluation and log delivery latency prevent an exact notification-time guarantee.
 Delayed logs can delay recovery or cause a false gap alert. Filters do not
 backfill history. They reflect confirmed persistence at log time, not source
 freshness, unique exports, or permanent protection against later deletion.
@@ -51,14 +67,73 @@ coverage limits. No new reader or deduplication service is introduced here.
 Persistence followed by a control-release failure can produce both an
 observation heartbeat and an invocation error; both are valid signals.
 
-All alarms notify on transitions to ALARM and OK; they do not send reminders on
-every evaluation. Error OK means fewer than three breaching minutes in the
-evaluation window; halt OK means no recent halt signal. Neither is proof
+Only missing-observation and polling-halt alarms notify on transitions to ALARM
+and OK; they do not send reminders on every evaluation. Diagnostic error OK
+means fewer than three breaching minutes in the evaluation window; halt OK
+means no recent halt signal. Neither is proof
 that collection resumed. Confirm recovery through the observation heartbeat,
 current logs, original evidence and the existing control inspection procedure.
 There is no automatic guard reset or retry. Throttles, dropped async events and
 Scheduler delivery failures remain diagnosable through existing AWS metrics;
 the heartbeat detects their resulting gaps without extra paid alarms.
+
+### Offline operational comparison for Issue #69
+
+The pinned private October 24 through October 26 18:48 UTC snapshot contains
+4,008 minute samples per series, all numeric including explicit zeros, with no
+nulls. Daily persisted-result counts are 1,219, 480 and 55; Lambda errors are
+43, 455 and 535. There are 471 recorded error transitions, 46 heartbeat
+transitions and no halt transitions. There is no halt metric series in this
+snapshot. The separately verified six-hour log analysis attributed 173 failures
+to source acquisition with successful failure-evidence persistence; the metric
+snapshot alone cannot establish handler failure stages or evidence integrity.
+
+The settled-data replay evaluates every minute after a full history is available,
+partitioning the preceding history into nonoverlapping aggregation periods at
+each evaluation. Startup state and earlier data are excluded. No ingestion
+delays, historical configuration updates or per-evaluation service reasons are
+available. Current heartbeat replay reproduces 46 transitions, all within two
+minutes of a same-direction recorded transition. Error replay gives 191, not
+471: final metric sums and the current configuration cannot reproduce the full
+service history. The prior 3-of-5 configuration and delivery timing are possible
+contributors, not verified explanations of that discrepancy.
+
+| Heartbeat policy | Modeled transitions Oct 24 / 25 / 26 | Recovery followed by re-alarm within 30 minutes |
+| --- | --- | --- |
+| Former 15-of-15 minutes below 1 | 6 / 11 / 29 | 15 |
+| 2-of-3 five-minute sums below 1 | 4 / 9 / 48 | 27 |
+| 3-of-4 five-minute sums below 1 | 8 / 9 / 43 | 23 |
+| Candidate 3-of-6 five-minute sums below 1 | 12 / 5 / 28 | 19 |
+| 3-of-6 five-minute sums below 2 | 10 / 5 / 2 | 5 |
+| Selected 3-of-6 five-minute sums below 3 | 4 / 3 / 0 | 0 |
+
+All policies detect all 23 observed zero-success spells lasting at least 15
+minutes before the next success. The longest is 524 minutes across the full
+capture; the earlier 176-minute finding concerned a narrower 24-hour period.
+The selected policy's modeled detection delays in those spells are 1-13 minutes,
+including cases already alarming at the start. Recovery bounces are descriptive
+proxies, not independently labeled false recoveries. The selected policy improves
+the comparatively healthy October 24 as well as the degraded days in transition
+count. Its modeled October 24 ALARM duration increases from 11 to 65 minutes:
+earlier deficit detection and slower recovery are intentional, not proof that
+every additional alarming minute is a true outage. The policy is not chosen
+solely for fewer transitions: adequate-window recovery rejects isolated
+successes and three-result bursts every 21 minutes while preserving sustained
+outage detection and recovery from steady successful collection.
+
+Boundary sensitivity matters: sampling only at fixed five-minute boundaries
+makes the below-1 candidate appear to have 15 transitions rather than 45. The
+selected policy yields 7 for each of the five boundary phases. Synthetic outage,
+intermittent-success, healthy and recovery tests exercise the configured logic.
+These observations support a bounded change, not a guarantee of future behavior.
+The same short capture informed selection and comparison; it is not an untouched
+validation period or an independently labeled set of outages and false alarms.
+[CloudWatch missing-data evaluation](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/alarms-and-missing-data.html)
+can use older real points before filling missing data; the heartbeat's explicit
+FILL avoids relying on sparse raw points for that policy. Delayed latest points
+can still be filled as zero; the 3-of-6 configuration tolerates one deficient
+period. See [FILL limitations](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/using-metric-math.html)
+and [sliding evaluation windows](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/alarm-evaluation-window.html).
 
 ## Private notification setup and verification
 
@@ -70,9 +145,9 @@ The topic output supports separately configured destinations. CloudWatch publish
 permission is limited to this account and these three alarm ARNs. The collector
 and Scheduler roles gain no permissions.
 
-Alarm actions are enabled only when `ScheduleState=ENABLED`. Disabling the
-schedule suppresses ALARM and OK notifications, while alarm evaluation continues.
-Manual collection errors during that maintenance state will therefore not email.
+The heartbeat and halt actions are enabled only when `ScheduleState=ENABLED`.
+Disabling the schedule suppresses their ALARM and OK notifications, while alarm
+evaluation continues. Collection errors have no direct actions in either state.
 Re-enabling actions on an already alarming resource must not be relied on to
 send a fresh transition notification: inspect its state explicitly.
 
@@ -91,8 +166,52 @@ configuration and ALARM/OK email delivery. Do not create extra YATA requests or
 clear restrictions for testing. Use an approved maintenance window to observe
 a collection gap, noting notification suppression when the schedule is disabled;
 testing alarm actions requires separate approved operator configuration. Confirm
-normal scheduled persistence clears the heartbeat afterward. Offline tests and
-SAM lint cannot prove AWS ingestion, alarm timing or email delivery.
+adequate sustained scheduled persistence clears the heartbeat afterward. Offline
+tests and SAM lint cannot prove AWS ingestion, alarm timing or email delivery.
+
+### Separately authorized deployment, verification and rollback
+
+1. Obtain independent review of the complete diff and this operational tradeoff,
+   then separate authorization for deployment and any live verification. This
+   local change does not establish that the notification problem is resolved.
+2. Capture the deployed stack template, packaged collector CodeUri, parameters,
+   alarm configuration/actions, action enablement and subscription status
+   privately. Compare drift with the reviewed configuration. Preserve the
+   current `ScheduleState` and `OperatorEmail` values using previous parameter
+   values; do not accept the disabled/empty template defaults. Resolve unexpected
+   drift before proceeding.
+3. Prepare a CloudFormation/SAM change set for the existing stack in eu-north-1,
+   reusing its exact deployed collector package URI. Only
+   `MissingObservationsAlarm` and `CollectionErrorsAlarm` should update in place;
+   reject replacements or changes to the function, schedule, guard, bucket, IAM,
+   filters, topic, subscription or polling-halt alarm. Execute only after the
+   change set receives separate approval. Do not use `PutMetricAlarm` to bypass
+   CloudFormation or repackage the collector for this alarm-only update.
+4. An unchanged `OperatorEmail` parameter does not prove that an unsubscribed
+   destination has been restored. Independently inspect the shared topic's email
+   subscription; with separate authorization, restore the intended endpoint and
+   complete its confirmation, reconciling the CloudFormation-managed
+   `OperatorSubscription` rather than adding unmanaged duplicates. Keep the
+   address private. Confirmed membership is required for both outage and halt
+   delivery. Test SNS delivery only with explicit authorization.
+5. Verify deployed heartbeat Sum/300s, threshold 3, 3-of-6, FILL zero, breaching
+   missing policy and both SNS actions. Verify diagnostic errors retain their
+   3-of-6/60s metric and dimension but have empty ALARM/OK actions. Verify halt
+   configuration and immediate ALARM/OK actions are unchanged. Inspect current
+   states manually; an alarm already in ALARM may not emit a new email merely
+   because a subscription or action is restored.
+6. Observe ordinary scheduled traffic, available metric arrival times and actual
+   transition reasons. Verify outage notification, rejection of isolated-success
+   recovery, sustained-success recovery notification and halt delivery when a
+   real authorized condition permits. Do not force YATA calls, reset restrictions
+   or disable production collection to manufacture evidence without authorization.
+   If no relevant transition occurs, mark that delivery check pending.
+7. For rollback, use a separately approved change set restoring the captured
+   pre-change alarm properties and actions through the same stack/package and
+   previous parameters. Verify unchanged resource identities and deployed rules
+   afterward. Restoring error SNS actions can restore the notification flood;
+   coordinate with the operator. A rollback does not restore a deleted or
+   unconfirmed subscription, fix upstream source failures or erase alarm history.
 
 ## Resource indicator semantics
 
@@ -250,8 +369,9 @@ storage $0.028/GB-month. No account billing API was used.
 | Existing persistence log gains a status token | Up to 25 additional ASCII bytes per completed persistence. At 44,640 nominal schedule opportunities in a 31-day month, about 1.12 MB extra ingestion, excluding duplicates/manual invocations | Less than 0.001 ingestion plus storage in this stated scenario |
 | SNS | State-transition notifications, one confirmed email subscriber; actual volume unknown. Advertised paid rates: $0.50/million requests and $2/100,000 email deliveries | Variable; do not invent notification volume |
 
-The error alarm now requires three breaching minutes out of six; it can reduce
-transient-error notifications but does not change resource charges. No numeric
+The diagnostic error alarm retains three breaching minutes out of six with no
+direct SNS actions. The heartbeat uses the existing metric at five-minute
+aggregation. Neither change alters the metric/alarm resource count. No numeric
 SNS saving is projected. Duplicate log increments do not create additional
 metric dimensions, but can distort metric counts and include additional ingested
 log bytes. The log-growth scenario above assumes no duplicate submissions.
