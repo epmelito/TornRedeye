@@ -1,4 +1,160 @@
-# Public operations dashboard
+# Public reporting: operations and stock
+
+## Player stock page (Issue #75)
+
+`stock.html` is the player-facing stock entry point on the existing
+static site. Its production source is `frontend/stock.html` and `frontend/src/`,
+built with the approved React, TypeScript and Vite exception in
+[Issue #75](https://github.com/epmelito/TornRedeye/issues/75#issuecomment-6457935732).
+Operations, Diagnostics and Infrastructure & Usage retain their
+routes and telemetry contract below. This stock implementation is local software;
+its production publication and event wiring are not activated by this document.
+
+`stock_publisher.py` builds `public/stock.json` from one exact normalized attempt
+and the previous public stock snapshot. The existing publisher handler routes S3
+ObjectCreated events to this operation without running the hourly telemetry
+queries. Collector acquisition and persistence never call the public publisher.
+Production wiring and permissions require the separate
+[stock activation review](deployment.md#stock-publication-activation-boundary).
+
+The version-1 `stock_snapshot` allowlist contains publication/retrieval/export
+times, complete/partial/failed/unavailable status, country keys and per-country
+source times, and item ID/name/reported presence/quantity/shop price. There are no
+evidence keys, bucket names, UUIDs, hashes, raw diagnostics, acquisition details or
+credentials. Item IDs and country keys identify public stock selections, not
+private collection identities. Names are rendered as text. Prices are source
+shop costs in Torn dollars; observed zero remains zero.
+
+Only explicitly returned item fields supply quantities/prices. Items or countries
+missing from a later report remain visible from the previous public inventory
+with unknown values, never inferred zero. Their retained names are last-reported
+labels. A failed acquisition or unusable export publishes unknown values and a
+visible status, rather than refreshing old quantities. Previously unseen omitted
+items cannot be enumerated from a partial export. The page distinguishes a country
+omitted from the snapshot from a reported country whose source time is unknown.
+Empty arrays do not prove that no shop items exist. Country/source freshness,
+collection age and publication age
+remain separate; five-minute source-age and two-minute update warnings are display
+cues, not evidence-validity or forecasting rules.
+
+Comparisons describe net quantity/price changes between adjacent published reports
+with advancing country source times. Both source and retrieval endpoints are
+retained. Matching cached reports retain the last nonzero supported change and its
+original intervals, labelled as the last change on the same source report, not a
+new change. Same-source contradictions and regressions remain flagged across
+subsequent cached reports. Conflicts, regressions and missing values block
+the affected comparison. Reports skipped by publication failure and gaps may hide
+changes: these are not sales counts, confirmed restocks or exact event times.
+No historical archive scan is required per update or visitor.
+
+The browser fetches only relative `stock.json` on load and every 30 seconds while
+visible, with an eight-second request timeout, one outstanding fetch, and immediate
+rechecking on return to the tab. Failed or invalid updates retain the last received
+snapshot with an error notice and aging timestamps. An initial failure displays
+unavailable. Query-based item/country, search, sort, availability and section
+selections survive refresh without SPA rewrite rules; legacy country hash links
+are accepted. Relative assets and JSON resolve both at the CloudFront root and
+under `/public/`. There are no visitor AWS credentials, SDK calls or WebSockets.
+The existing publication/collection/source-age cues remain independent.
+
+The approved Apex Eye SVG, crimson RED wordmark and dark purple visual system
+are implemented only in the player frontend. Item-first comparisons cover the
+11 known destinations plus any additional returned country keys; country-first
+browsing uses a compact shop list. Missing items never establish a sale location
+or observed zero. Contextual details preserve net-change intervals and cached,
+conflicting or regressed source classifications. Mobile replaces the table with
+readable disclosures, a destination dialog and section navigation. Saved item
+IDs are local to the browser; no account or service receives them.
+
+The observation panel displays only a current quantity and, when supported, the
+prior quantity recovered from the snapshot's net change over its original source
+interval. It shows two endpoints, not a continuous historical curve or archive.
+A missing comparison produces an unavailable state. Forecast issuances, estimates,
+reliability and outcome comparison remain unavailable pending separate Issue #68
+integration. No historical publication schema or infrastructure was added.
+
+### Build and local player preview
+
+Use Node 24 or newer and the lockfile in `frontend/`. Run
+`npm --prefix frontend ci`, `npm --prefix frontend run build`, then
+`python -m tools.package_stock_frontend`. Vite emits `frontend/dist/stock.html`
+and external hashed `stock-assets/` files using a relative base. The assembler
+writes `.aws-sam/stock-site/`, overlaying the new stock page beside byte-for-byte
+copies of the operations pages, shared operations CSS and operations JavaScript.
+The existing default root, `/public` origin, CSP, publisher and snapshot key do
+not change. The self-hosted Roboto Condensed font ships with its OFL license.
+There are no CDN resources, inline scripts/styles, router or additional UI library.
+
+`dashboard/stock.html` and `dashboard/stock.js` are retained as the pre-React
+implementation and regression reference; they are not the new production upload
+target. Do not upload the raw `frontend/` source or the retained legacy stock page.
+Only the assembled stock entry and its allowlisted assets are player release input.
+
+`python -m tools.preview_stock_frontend` serves the assembled site on
+`http://127.0.0.1:8767/stock.html` with the checked-in CSP. It also maps
+`/public/stock.html` for base-path inspection. Without a snapshot it deliberately
+shows unavailable stock. A separately selected public snapshot can be supplied
+with `--snapshot`; `--label` is mandatory for such previews and appears prominently
+in the page. Use an explicit archived/synthetic label; source and collection times
+must retain their actual meaning. Preview input is held in memory and is never
+included by static packaging. No cloud/source request is made by these tools.
+
+Run `npm --prefix frontend test` for the actual React data/polling core and
+`npm --prefix frontend run build` for type/build checks. Keep the existing legacy
+frontend checks and operations checks; they preserve the prior work. Inspect the
+assembled output in a real browser at desktop/mobile sizes, including filtering,
+keyboard controls, error states, refresh and both URL base paths. A passing build
+or fake-DOM check does not establish rendered quality. Static release remains
+separately authorized.
+
+Publication sets `Cache-Control: public,max-age=15`. The existing CloudFront policy
+has MinTTL 0, DefaultTTL 300 and MaxTTL 3600: the explicit stock header can override
+the default without changing operations JSON or asset caching. Browser `no-cache`
+requests revalidation; they do not bypass a still-fresh shared CDN object. Query
+parameters are excluded from the cache key, so cache-busting URLs are not used.
+A controlled fake-clock test measures 44 seconds from publication to display when
+another visitor fills the shared cache immediately before publication. The ideal
+15-second cache plus 30-second polling bound is 45 seconds, plus request/processing
+time, for a visible tab. This is not a measured production SLA; background tabs,
+network failures, notification delivery and source latency can add delay.
+
+Each distinct notification needs at most one normalized GET (1 MiB bound), one
+previous-public GET (256 KiB bound), and one conditional PUT (256 KiB bound).
+There is no LIST or telemetry request. Exact configured bucket/key, primary
+lineage, collection identity/retrieval partition and persisted SHA-256 metadata
+are checked. Up to ten event records are accepted per invocation. Duplicate or
+older retrievals do not refresh publication time. ETag conditions prevent an
+overlapping older writer from replacing a newer snapshot; conflicts fail visibly.
+A denied previous-public GET permits only a create-only PUT. Read/serialization/
+size/write failures retain the previous object; lost PUT acknowledgements leave
+the outcome uncertain. No evidence is changed or deleted.
+
+At an illustrative 44,640 notifications/month: at most 89,280 GETs and 44,640 PUTs
+before duplicates/retries, about $0.26 using the repository's historical Stockholm
+reference rates ($0.0004/1,000 GET; $0.005/1,000 PUT). SDK attempts are capped at two
+per operation. At 128 MiB, an assumed 0.2–2 billed seconds/invocation adds roughly
+$0.03–$0.20 Lambda request/compute charges at the recorded reference rates. Those
+durations are scenarios, not measured AWS runtime. Viewer requests, data transfer,
+logs, storage, retries and backup are excluded; current rates/allowances need
+preflight verification. A visible visitor makes about 120 snapshot checks/hour;
+shared edge caching reduces origin traffic, but does not bound viewer charges.
+
+The observed-stock schema is deliberately independent of future forecast records.
+Issue #68 owns prospective measurement, probability semantics, prediction freshness
+and measured reliability. Later validated forecasts can join on country/item at
+presentation time through a separately approved contract. No forecast fields or
+confidence ratings are reserved or fabricated now.
+
+Offline checks: `python -B -m unittest discover -s tests -p test_stock_publisher.py`
+and `node tests/test_stock_frontend.cjs`. The compact public fixture is synthetic;
+`tests/test_stock_publisher.py:preview_fixture()` supplies a synthetic 227-item,
+11-country layout for larger local visual checks. Genuine retained evidence may
+be sanitized through `stock_publisher.build_snapshot` for an explicitly archived
+local preview; preserve its source/retrieval times, use the actual local generation
+time for publication, and never include private identities or evidence in the
+build. No new source requests or private evidence are needed for normal tests.
+
+## Operations dashboard contract
 
 Issue [#11](https://github.com/epmelito/TornRedeye/issues/11) and
 [approved decisions](https://github.com/epmelito/TornRedeye/issues/11#issuecomment-6102066164)
@@ -15,7 +171,7 @@ A Lambda configured for hourly publication (Python 3.13, runtime boto3, 128 MiB
 x86, 90-second timeout) publishes only `public/data.json`. The EventBridge schedule
 defaults to disabled; activation requires separate authorization. The public
 snapshot contains no scheduler configuration or live schedule status.
-The unversioned private encrypted S3 bucket also holds five static assets.
+The unversioned private encrypted S3 bucket also holds the static page assets.
 No hourly archive, database, frontend framework,
 new custom metrics, alarms, provider requests, billing API, or visitor AWS calls
 are introduced. An EventBridge rule starts disabled; automatic delivery and
@@ -257,12 +413,16 @@ Run from the repository root:
 python -m tools.package_dashboard
 python -m unittest discover -s tests
 node tests/test_dashboard_frontend.cjs
+node tests/test_stock_frontend.cjs
+npm --prefix frontend test
+npm --prefix frontend run build
+python -m tools.package_stock_frontend
 sam validate --lint --template-file dashboard-template.json --region eu-north-1
 git diff --check
 ```
 
 The generated `.aws-sam/dashboard-publisher.zip` contains `dashboard_publisher.py`,
-`tornredeye/__init__.py` and `tornredeye/evidence_paths.py`, using deterministic
+`stock_publisher.py`, `tornredeye/__init__.py` and `tornredeye/evidence_paths.py`, using deterministic
 atomic packaging. Boto3/botocore
 come from the Lambda runtime; no vendored dependency is needed. Production
 packaging should use committed LF source, following the existing collector release
@@ -277,10 +437,14 @@ dashboard stack in eu-north-1 with ScheduleState DISABLED, using the collector
 stack's evidence bucket, function, log group, metric namespace and SNS **topic name**
 (not its ARN). For infrastructure updates, inspect existing resources, parameters
 and scheduling before preparing a change set. Do not update the collector stack.
-Upload `dashboard/index.html`, `diagnostics.html`, `usage.html`, `styles.css`,
-and `app.js` only to corresponding
-`public/` keys with correct MIME types and five-minute cache control. Do not upload
-repository source or evidence. Verify all three direct routes, navigation,
+Use the assembled `.aws-sam/stock-site/` output, not raw source, for a reviewed
+frontend release. Its generated `stock-site-files.json` lists the operations files,
+`stock.html` and external hashed `stock-assets/` files (including font/license).
+Upload only those listed paths to corresponding `public/` keys, with correct MIME
+types. Retain five-minute caching for operations assets; revalidate the stock HTML
+and use immutable caching for hashed stock assets. Retain older hashed assets for
+cached HTML references. Do not upload the manifest or any preview JSON/evidence. Do not upload
+repository source or evidence. Verify all four direct routes, navigation,
 snapshot loading and cache behavior after an authorized update. Initial bootstrap
 also requires authorized publisher invocation and verification of private S3 /
 HTTPS CloudFront access.

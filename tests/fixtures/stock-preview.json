@@ -1,0 +1,211 @@
+{
+  "kind": "stock_snapshot",
+  "schema_version": 1,
+  "published_at_utc": "2026-10-27T12:01:00.000000Z",
+  "retrieved_at_utc": "2026-10-27T12:01:00.000000Z",
+  "export_timestamp_utc": "2026-10-27T12:00:59.000000Z",
+  "state": "partial",
+  "countries": [
+    {
+      "code": "arg",
+      "source_timestamp_utc": "2026-10-27T12:00:40.000000Z",
+      "reported": true,
+      "items": [
+        {
+          "id": 1000,
+          "name": "Example shop item 1",
+          "quantity": 125,
+          "price": 1000,
+          "reported": true,
+          "comparison": {
+            "state": "compared",
+            "quantity_change": 125,
+            "price_change": 0,
+            "source_interval_utc": [
+              "2026-10-27T11:59:40.000000Z",
+              "2026-10-27T12:00:40.000000Z"
+            ],
+            "retrieval_interval_utc": [
+              "2026-10-27T12:00:00.000000Z",
+              "2026-10-27T12:01:00.000000Z"
+            ]
+          }
+        },
+        {
+          "id": 1001,
+          "name": "Example shop item 2",
+          "quantity": 135,
+          "price": 0,
+          "reported": true,
+          "comparison": {
+            "state": "compared",
+            "quantity_change": 0,
+            "price_change": 0,
+            "source_interval_utc": [
+              "2026-10-27T11:59:40.000000Z",
+              "2026-10-27T12:00:40.000000Z"
+            ],
+            "retrieval_interval_utc": [
+              "2026-10-27T12:00:00.000000Z",
+              "2026-10-27T12:01:00.000000Z"
+            ]
+          }
+        },
+        {
+          "id": 1002,
+          "name": "Example shop item 3",
+          "quantity": 170,
+          "price": 4000,
+          "reported": true,
+          "comparison": {
+            "state": "compared",
+            "quantity_change": 0,
+            "price_change": 0,
+            "source_interval_utc": [
+              "2026-10-27T11:59:40.000000Z",
+              "2026-10-27T12:00:40.000000Z"
+            ],
+            "retrieval_interval_utc": [
+              "2026-10-27T12:00:00.000000Z",
+              "2026-10-27T12:01:00.000000Z"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "code": "can",
+      "source_timestamp_utc": "2026-10-27T12:00:32.000000Z",
+      "reported": true,
+      "items": [
+        {
+          "id": 1030,
+          "name": "Example shop item 1",
+          "quantity": 0,
+          "price": 1000,
+          "reported": true,
+          "comparison": {
+            "state": "compared",
+            "quantity_change": 0,
+            "price_change": 0,
+            "source_interval_utc": [
+              "2026-10-27T11:59:32.000000Z",
+              "2026-10-27T12:00:32.000000Z"
+            ],
+            "retrieval_interval_utc": [
+              "2026-10-27T12:00:00.000000Z",
+              "2026-10-27T12:01:00.000000Z"
+            ]
+          }
+        },
+        {
+          "id": 1031,
+          "name": "Example shop item 2",
+          "quantity": 135,
+          "price": 0,
+          "reported": true,
+          "comparison": {
+            "state": "compared",
+            "quantity_change": 0,
+            "price_change": 0,
+            "source_interval_utc": [
+              "2026-10-27T11:59:32.000000Z",
+              "2026-10-27T12:00:32.000000Z"
+            ],
+            "retrieval_interval_utc": [
+              "2026-10-27T12:00:00.000000Z",
+              "2026-10-27T12:01:00.000000Z"
+            ]
+          }
+        },
+        {
+          "id": 1032,
+          "name": "Example shop item 3",
+          "quantity": null,
+          "price": 4000,
+          "reported": true,
+          "comparison": {
+            "state": "compared",
+            "quantity_change": null,
+            "price_change": 0,
+            "source_interval_utc": [
+              "2026-10-27T11:59:32.000000Z",
+              "2026-10-27T12:00:32.000000Z"
+            ],
+            "retrieval_interval_utc": [
+              "2026-10-27T12:00:00.000000Z",
+              "2026-10-27T12:01:00.000000Z"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "code": "cay",
+      "source_timestamp_utc": "2026-10-27T12:00:24.000000Z",
+      "reported": true,
+      "items": [
+        {
+          "id": 1060,
+          "name": "Example shop item 1",
+          "quantity": 0,
+          "price": 1000,
+          "reported": true,
+          "comparison": {
+            "state": "compared",
+            "quantity_change": 0,
+            "price_change": 0,
+            "source_interval_utc": [
+              "2026-10-27T11:59:24.000000Z",
+              "2026-10-27T12:00:24.000000Z"
+            ],
+            "retrieval_interval_utc": [
+              "2026-10-27T12:00:00.000000Z",
+              "2026-10-27T12:01:00.000000Z"
+            ]
+          }
+        },
+        {
+          "id": 1061,
+          "name": "Example shop item 2",
+          "quantity": 135,
+          "price": 0,
+          "reported": true,
+          "comparison": {
+            "state": "compared",
+            "quantity_change": 0,
+            "price_change": 0,
+            "source_interval_utc": [
+              "2026-10-27T11:59:24.000000Z",
+              "2026-10-27T12:00:24.000000Z"
+            ],
+            "retrieval_interval_utc": [
+              "2026-10-27T12:00:00.000000Z",
+              "2026-10-27T12:01:00.000000Z"
+            ]
+          }
+        },
+        {
+          "id": 1062,
+          "name": "Example shop item 3",
+          "quantity": 170,
+          "price": 4000,
+          "reported": true,
+          "comparison": {
+            "state": "compared",
+            "quantity_change": 0,
+            "price_change": 0,
+            "source_interval_utc": [
+              "2026-10-27T11:59:24.000000Z",
+              "2026-10-27T12:00:24.000000Z"
+            ],
+            "retrieval_interval_utc": [
+              "2026-10-27T12:00:00.000000Z",
+              "2026-10-27T12:01:00.000000Z"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

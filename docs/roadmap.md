@@ -6,6 +6,15 @@ for implemented capabilities and the linked contracts for experimental work.
 
 ## Product direction
 
+The player-facing stock website is the presentation layer for the integrated
+stock-and-forecast product. Start with source-reported quantities, shop prices,
+descriptive changes and clear freshness. Integrate genuinely issued, evaluated
+and updated predictions from Issue #68 only when supported, preserving distinct
+observation times, prediction freshness, uncertainty and measured reliability.
+The local Issue #75 React interface implements connected item/country browsing
+and supported observation endpoints. It does not activate production or forecasts,
+publish an archive, or imply continuous historical coverage.
+
 - **Continuously updated all-country stock intelligence.** Use shared country/item
   processing to show availability, source freshness, gaps and uncertainty across
   supported overseas shops.
@@ -77,7 +86,7 @@ TornRedeye advances toward useful, evidence-backed stock availability forecasts 
 
 3. **Offline forecasting baseline.** Where evidence supports the selected reusable target, compare a simple country/item forecast against feasible alternatives. **Exit:** Reproducible predictions, historical evaluation, and clearly reported uncertainty. Production accuracy is not assumed.
 
-4. **Forward validation.** Evaluate a selected approach against subsequently collected observations that did not inform its selection. Examine forecast reliability, calibration, and performance against simple baselines. **Exit:** Evidence supporting practical usefulness, or a documented reason to revise the target or method.
+4. **Population-wide forward validation.** Evaluate reusable methods across country/item pairs using genuinely issued forecasts and subsequently accounted outcomes. A predeclared probability sample may bound initial feasibility work; retain inclusion probabilities, every selected pair, abstentions, failures and coverage denominators. Examine forecast reliability, calibration and simple baselines without treating dependent reports as independent samples. **Exit:** Interpretable forward measurement across the observed population and evidence supporting practical usefulness, or a documented reason to revise the target or method. Initial feasibility alone does not establish market-wide predictive accuracy.
 
 5. **Useful forecasting MVP.** Make sufficiently supported forecasts available through the existing reporting system, including probability, horizon, evidence freshness, and uncertainty. **Exit:** Users can interpret predictions to inform stock-purchasing or travel decisions, with insufficient-evidence outcomes where necessary.
 

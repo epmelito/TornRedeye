@@ -54,6 +54,53 @@ delete records to manufacture a clean restart, reuse an active/restored epoch, o
 affect the independent Hawaii pilot. Account for interrupted/pending requests
 explicitly before making a separate continuation/capacity decision.
 
+## Stock publication activation boundary
+
+Issue #75 adds local stock publication code and static assets, not production
+wiring. Independently review these minimum changes before any cloud operation:
+
+1. Verify YATA/Torn stock redistribution and attribution conditions. The page
+   attributes both sources, but this does not establish permission to redistribute.
+2. Package the existing dashboard publisher with `stock_publisher.py`; preserve
+   the hourly operations path. Build and assemble the reviewed React stock frontend
+   using the [local build contract](dashboard.md#build-and-local-player-preview).
+   Upload the assembled `stock.html` and allowlisted `stock-assets/` files alongside
+   the preserved operations assets; do not upload the retained legacy stock page,
+   raw frontend source or a local preview snapshot. Keep `index.html` as the
+   operations route;
+   changing the distribution's default root to Stock is a separate product choice.
+3. Extend the existing publisher role only with GET and conditional PUT on the
+   exact hosting key `public/stock.json`, matching the existing `public/data.json`
+   conditional-write policy. Its existing normalized-attempt GET scope suffices;
+   no raw evidence, archive LIST, collector invocation or evidence writes are needed.
+   The checked-in template still authorizes only the operations JSON key.
+4. Route evidence-bucket ObjectCreated notifications, filtered to
+   `evidence/live-v1/` and `/attempt.json`, to the existing publisher function.
+   Review S3's exact SourceArn/SourceAccount Lambda invocation permission and
+   preserve all existing bucket notifications. Do not add a publisher call to
+   collector persistence or run hourly monitoring every minute. Notification and
+   permission wiring is deliberately absent from the local templates pending review.
+5. Confirm CloudFront's zero minimum TTL and stock response `max-age=15`, plus
+   routes, content types, conditional publication, concurrent events and live
+   publication-to-display delay. Do not infer deployed configuration from local
+   templates. Existing asynchronous retry settings and delivery semantics need
+   review: events may be duplicated/out of order, and a failed publication can be
+   missed until a later event. Logs/errors and browser age/error notices remain
+   visible; do not promise one publication for every saved acquisition.
+6. Approve a bounded invocation/cost budget and inspect actual packaging,
+   permissions and runtime before activation. Review notification bursts/backlog
+   against the current shared regional concurrency quota so public reporting
+   cannot starve collector execution. Code-path independence does not establish
+   account-resource isolation; no concurrency or quota change is approved here.
+   Use the stock-only operation; it
+   performs no provider request and creates no new schedule, service or database.
+
+Pause stock publication by removing only its separately approved notification
+route; retain the last public snapshot so browsers show its age. Do not pause
+collection or the operations schedule. Restore assets/function code only through
+a separately approved deployment. No production or forecasting activation is
+authorized by this local implementation.
+
 ## Offline validation
 
 Use Python 3.11+; deployed functions retain Python 3.13 and the existing boto3 SDK.
