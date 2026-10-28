@@ -30,6 +30,8 @@ flowchart TD
     history --> publisher["Hourly Lambda snapshot publisher"]
     monitoring --> publisher
     publisher --> dashboard["CloudFront: public operations dashboard"]
+    history --> stock["Independent stock-only publication operation"]
+    stock --> player["CloudFront: player stock page"]
     history --> shadow["Independent private hourly shadow pilot"]
     shadow --> forecasts["Private S3: immutable forecasts and outcomes"]
     forecasts --> backup
@@ -63,13 +65,20 @@ backups verify uploaded archives and payload hashes by reading them back.
 | CloudWatch and SNS | Monitor collection through logs, metrics and alarms, and route notifications to configured, confirmed subscriptions. |
 | GitHub Actions | Run verified daily backups with short-lived AWS/Azure access through OpenID Connect (OIDC). |
 | Azure Blob Storage | Keep independent evidence and immutable forecast backups, including archives and integrity records. |
-| Amazon CloudFront | Deliver the public operations dashboard over HTTPS from a private S3 origin. |
+| Amazon CloudFront | Deliver static operations and player stock pages over HTTPS from a private S3 origin. |
+| React, TypeScript and Vite | Build the player stock interface as static assets; operations pages retain their existing frontend. |
 | AWS SAM / CloudFormation | Define cloud resources and permissions as reviewable templates; deployment and schedule activation remain separate actions. |
 
 ## Capabilities and limitations
 
 - **Implemented operational foundation:** guarded collection, immutable evidence
   writes, integrity-checked incremental backups and an operations dashboard.
+- **Player stock presentation:** a lightweight all-country stock snapshot and
+  automatically refreshing React interface with item/country browsing, reported
+  quantities, shop prices,
+  descriptive changes and separate source/collection/publication times. Production
+  event wiring and publication remain separately gated; see the
+  [stock reporting contract](docs/dashboard.md#player-stock-page-issue-75).
 - **Implemented shared processing:** deterministic all-country/item normalization,
   field diagnostics and reusable local history analysis. Time-partitioned evidence
   supports bounded prospective reads and independently verified Azure recovery.
@@ -102,20 +111,30 @@ Tests use synthetic evidence and fake cloud clients; no cloud credentials are
 needed. Local analysis requires an explicitly selected private evidence subset.
 Deployment and any live source/storage access are separate operating actions.
 
+The player frontend uses Node 24 or newer. Install its locked dependencies with
+`npm --prefix frontend ci`, then run `npm --prefix frontend test` and
+`npm --prefix frontend run build`. Assemble the stock page beside the unchanged
+operations assets with `python -m tools.package_stock_frontend`. In Windows
+PowerShell, use `npm.cmd` in place of `npm`. See the
+[local player preview](docs/dashboard.md#build-and-local-player-preview) for honest
+archived/synthetic preview inputs and the static hosting boundary.
+
 ## Repository layout
 
 ```text
 tornredeye/    Shared normalization, stock history and experimental accounting
-tools/         Lambda package builders and daily backup wrapper
+tools/         Lambda/static package builders and local preview/backup helpers
 tests/         Deterministic tests and fixtures
 docs/          Contracts, operation instructions and product roadmap
-dashboard/     Existing static operations dashboard
+dashboard/     Existing static operations dashboard and preserved stock regression
+frontend/      React, TypeScript and Vite player stock interface
 ```
 
 Operational Lambda entry points, their supporting collector/backup modules and
 AWS templates remain at the root to preserve deployed handlers and operating
-commands. Package builders include the shared package where required. No package
-installation or additional framework is required.
+commands. Lambda package builders include the shared Python package where required
+and need no additional framework. Frontend dependencies and builds are scoped to
+`frontend/`.
 
 ## Documentation
 

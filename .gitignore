@@ -6,3 +6,6 @@ manifest.json
 writer.lock
 /inventory/
 /objects/
+
+/frontend/node_modules/
+/frontend/dist/

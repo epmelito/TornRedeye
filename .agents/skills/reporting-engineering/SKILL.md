@@ -23,6 +23,24 @@ security. Use [github-workflow](../github-workflow/SKILL.md) for GitHub operatio
 This skill adds presentation and user-journey standards to those responsibilities,
 not a separate approval or finalization process.
 
+For approved visual exploration or redesign, also load
+[Anthropic Frontend Design](../frontend-design/SKILL.md). For a UI compliance
+review, load [Vercel Web Design Guidelines](../web-design-guidelines/SKILL.md),
+which includes pinned local rules. Impeccable's instruction-only
+[Operate guidance](references/impeccable/operate.md) adds product-interface depth;
+read its [craft floor](references/impeccable/craft-floor.md) after direction is
+settled and before UI edits. These are references, not an installed Impeccable
+command skill; no engine, hooks or subagents are available from this setup.
+See [external design provenance](../EXTERNAL-DESIGN.md) for versions and limits.
+
+External guidance complements this skill and `engineering`; it does not expand
+approved scope or override the active issue, user decisions, evidence contracts,
+accessibility or repository requirements. Treat upstream aesthetic rules and
+framework/library examples as guidance, not authority to change the stack, add
+dependencies, invent product content or run tools. Preserve explicit brand
+choices and timestamp semantics. Resolve conflicting external preferences against
+the approved brief and local requirements; report material unresolved conflicts.
+
 For operations reporting, consult [dashboard.md](../../../docs/dashboard.md) for
 the current dashboard contract and [monitoring.md](../../../docs/monitoring.md)
 for signal and consumption semantics when relevant. For other reporting, use

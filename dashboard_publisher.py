@@ -271,6 +271,18 @@ def lambda_handler(event, context):
     import boto3
     from botocore.config import Config
     configuration = Config(connect_timeout=2, read_timeout=3, retries={"total_max_attempts": 2})
+    if isinstance(event, dict) and ("Records" in event or event.get("Event") == "s3:TestEvent"):
+        from stock_publisher import process_event
+        try:
+            def stock_budget():
+                if context.get_remaining_time_in_millis() < 10000:
+                    raise TimeoutError("stock publication budget exhausted")
+            return process_event(boto3.client("s3", config=configuration), os.environ, event,
+                                 datetime.now(UTC), stock_budget)
+        except Exception as error:
+            print(f"stock publication failed ({publication_error_category(error)}); "
+                  "previous object retained or write outcome uncertain")
+            raise RuntimeError("stock publication failed") from None
     clients = {name: boto3.client(name, config=configuration) for name in ("cloudwatch", "logs", "s3")}
 
     def budget():

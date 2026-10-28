@@ -383,7 +383,7 @@ class DashboardInfrastructureTests(unittest.TestCase):
             path = Path(directory) / "publisher.zip"
             package_dashboard.package(path)
             with ZipFile(path) as archive:
-                self.assertEqual(archive.namelist(), ["dashboard_publisher.py", "tornredeye/__init__.py", "tornredeye/evidence_paths.py"])
+                self.assertEqual(archive.namelist(), ["dashboard_publisher.py", "stock_publisher.py", "tornredeye/__init__.py", "tornredeye/evidence_paths.py"])
                 self.assertIsNone(archive.testzip())
                 self.assertEqual(archive.read("dashboard_publisher.py"), (ROOT / "dashboard_publisher.py").read_bytes())
             original = path.read_bytes(); package_dashboard.package(path)

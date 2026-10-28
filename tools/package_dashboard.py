@@ -9,7 +9,7 @@ ARTIFACT = ROOT / ".aws-sam" / "dashboard-publisher.zip"
 
 
 def package(destination=ARTIFACT):
-    modules = ("dashboard_publisher.py", "tornredeye/__init__.py", "tornredeye/evidence_paths.py")
+    modules = ("dashboard_publisher.py", "stock_publisher.py", "tornredeye/__init__.py", "tornredeye/evidence_paths.py")
     sources = {name: (ROOT / name).read_bytes() for name in modules}
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = None
