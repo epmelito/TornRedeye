@@ -9,7 +9,8 @@ Daily Azure backup is enabled; scheduled GitHub Actions
 [run 39926391370](https://github.com/epmelito/TornRedeye/actions/runs/39926391370)
 succeeded. Independent Azure recovery previously passed. These are dated operational
 observations, not guarantees of continuing health, complete coverage or forecast
-quality. The public dashboard publisher's enabled state is **not verified** here.
+quality. That dated record does not verify the public dashboard publisher's
+enabled state; later operator observations appear in the stock activation boundary.
 
 This guide does not authorize further cloud access, deployment or schedule changes.
 
@@ -56,52 +57,188 @@ explicitly before making a separate continuation/capacity decision.
 
 ## Stock publication activation boundary
 
-Issue #75 adds local stock publication code and static assets, not production
-wiring. Independently review these minimum changes before any cloud operation:
+Issue #75 reuses the existing dashboard publisher, packaging and private hosting
+bucket. The local template now prepares exact-key stock permissions and an S3
+invocation grant; it does **not** configure or activate bucket notifications.
+No cloud operation or public delivery is authorized by this preparation.
 
-1. Verify YATA/Torn stock redistribution and attribution conditions. The page
-   attributes both sources, but this does not establish permission to redistribute.
-2. Package the existing dashboard publisher with `stock_publisher.py`; preserve
-   the hourly operations path. Build and assemble the reviewed React stock frontend
-   using the [local build contract](dashboard.md#build-and-local-player-preview).
-   Upload the assembled `stock.html` and allowlisted `stock-assets/` files alongside
-   the preserved operations assets; do not upload the retained legacy stock page,
-   raw frontend source or a local preview snapshot. Keep `index.html` as the
-   operations route;
-   changing the distribution's default root to Stock is a separate product choice.
-3. Extend the existing publisher role only with GET and conditional PUT on the
-   exact hosting key `public/stock.json`, matching the existing `public/data.json`
-   conditional-write policy. Its existing normalized-attempt GET scope suffices;
-   no raw evidence, archive LIST, collector invocation or evidence writes are needed.
-   The checked-in template still authorizes only the operations JSON key.
-4. Route evidence-bucket ObjectCreated notifications, filtered to
-   `evidence/live-v1/` and `/attempt.json`, to the existing publisher function.
-   Review S3's exact SourceArn/SourceAccount Lambda invocation permission and
-   preserve all existing bucket notifications. Do not add a publisher call to
-   collector persistence or run hourly monitoring every minute. Notification and
-   permission wiring is deliberately absent from the local templates pending review.
-5. Verify the FREE managed cache policy's one-second minimum and the explicit
-   stock response `max-age=15` against the
-   [cache contract](dashboard.md#cloudfront-free-candidate-compatibility), plus
-   routes, content types, conditional publication, concurrent events and live
-   publication-to-display delay. Do not infer deployed configuration from local
-   templates. Existing asynchronous retry settings and delivery semantics need
-   review: events may be duplicated/out of order, and a failed publication can be
-   missed until a later event. Logs/errors and browser age/error notices remain
-   visible; do not promise one publication for every saved acquisition.
-6. Approve a bounded invocation/cost budget and inspect actual packaging,
-   permissions and runtime before activation. Review notification bursts/backlog
-   against the current shared regional concurrency quota so public reporting
-   cannot starve collector execution. Code-path independence does not establish
-   account-resource isolation; no concurrency or quota change is approved here.
-   Use the stock-only operation; it
-   performs no provider request and creates no new schedule, service or database.
+The operator's starting observations for this integration report a deployed
+operations publisher with October 22 code and its hourly rule **DISABLED**,
+with no stock-specific IAM statements or
+notifications targeting it, and no hosted stock snapshot/page/assets. The React
+release was built and validated with 12 assembled files and 12 matching metadata
+entries. These are supplied observations, not a new AWS inspection or proof that
+local code is deployed. CloudFront FREE remains active with delivery disabled.
 
-Pause stock publication by removing only its separately approved notification
-route; retain the last public snapshot so browsers show its age. Do not pause
-collection or the operations schedule. Restore assets/function code only through
-a separately approved deployment. No production or forecasting activation is
-authorized by this local implementation.
+### Ordered stock integration procedure (separately authorized)
+
+1. The owner has accepted proceeding with a free, non-monetized website and
+   visible YATA attribution. Preserve those accepted conditions. Explicit
+   third-party permission has not been independently verified.
+   Obtain independent review and separate authority for code/IAM changes,
+   one bootstrap invocation, S3 publication and,
+   later, notification activation. The operator needs `s3:GetBucketNotification`
+   and `s3:PutBucketNotification` on the exact evidence bucket in addition to
+   existing deployment, invocation and hosting-object permissions; this work does
+   not grant those operator permissions. Approve a bounded invocation/request budget.
+   Capture the actual publisher code/package, role policy, Lambda resource policy,
+   dashboard parameters, operations schedule, full evidence-bucket notification
+   configuration and hosting object bodies/properties privately for recovery.
+   Verify the evidence bucket and publisher are in the same region and account.
+   Preserve `FreePlanCandidate=ENABLED`, `DistributionEnabled=false`, the existing
+   WAF/policies/Function and operations `ScheduleState=DISABLED`. Do not enable
+   or otherwise change schedules. Do not change the collector stack,
+   its role, evidence, source requests or collection schedule.
+2. Package with `python -B -m tools.package_dashboard`; the existing artifact
+   contains `dashboard_publisher.py`, `stock_publisher.py` and shared evidence-path
+   validation. Review the dashboard stack change set: deploy the refreshed code
+   together with the three stock statements in `BoundedDashboardPublication` and
+   `StockPublicationPermission`. The statements allow only GET and conditional PUT
+   on `public/stock.json`, preserving the proven `data.json` pattern: create with
+   `IfNoneMatch: *`, replace with `IfMatch`. Existing normalized-attempt GET scope
+   suffices; no raw reads, LIST, evidence writes or additional service are added.
+   The invocation grant permits only `s3.amazonaws.com`, the exact
+   `EvidenceBucketName` ARN and `AWS::AccountId`. It cannot enforce an object-key
+   filter; notification filtering and handler validation provide that boundary.
+3. Verify deployed package bytes/code hash, environment, role policy and the scoped
+   resource-policy statement before any stock invocation or notification change.
+   Wait for the Lambda update to complete successfully; stack completion alone
+   does not prove correct runtime behavior. Verify the operations path through
+   offline regression tests and package inspection. The live hourly rule is
+   DISABLED, so no ordinary scheduled publication can be observed without enabling
+   it. If live operations verification is necessary, require a separately authorized
+   invocation of the existing publisher, without new source calls or schedule changes.
+   Leave stock notifications absent. In particular, do not send S3 test/events to
+   the October 22 code: it predates the stock dispatch path.
+4. **Bootstrap the missing snapshot before metadata planning.** Select one exact,
+   genuine persisted canonical attempt, using its actual evidence bucket/key,
+   retrieval identity and SHA-256 metadata. Do not create/copy an evidence object
+   to trigger publication, synthesize stock, relabel old source times or scan an
+   archive for this purpose. Under the separate invocation authority, call the
+   updated existing handler synchronously with a replay envelope containing a
+   **`Records` array with exactly one record**, whose fields are:
+   `eventSource: aws:s3`, `eventName: ObjectCreated:Put`,
+   `s3.bucket.name: <verified evidence bucket>` and
+   `s3.object.key: <URL-encoded exact persisted attempt key>`.
+   This is an operator replay, not evidence that S3 delivered an event. The handler
+   validates the canonical path, digest and document identity before constructing
+   allowlisted public fields. Inspect both invocation errors and returned payload;
+   a transport-success status alone is insufficient. Require `updated: 1` for the
+   first creation, then GET/HEAD `public/stock.json` and verify schema, sanitized
+   fields, actual source/retrieval times, `ContentType: application/json` and
+   `CacheControl: public,max-age=15`. Keep genuine stale/failed/partial states
+   visible. If the PUT outcome is uncertain or an object already exists, read back
+   and reconcile; never force an unconditional retry or delete a newer snapshot.
+5. The [metadata planner](dashboard.md#deterministic-origin-metadata-delivery)
+   requires **both** `public/data.json` and `public/stock.json` in its complete
+   inventory. It deliberately fails while stock JSON is missing; do not remove
+   that check or insert a preview fixture. After bootstrap, pause only public
+   writers under separate authority, wait for in-flight work and capture fresh
+   inventory. Keep the operations hourly rule DISABLED throughout this metadata
+   window; do not enable it. Apply the existing reviewed metadata
+   and conditional-write/readback contract to the assembled stock page/assets and
+   existing public objects; neither manifest nor preview JSON is public content.
+   Retain older hashed assets and their reviewed release metadata. Keep
+   `index.html` as the operations root. Changing it to Stock is a separate decision.
+
+   The operator reports an existing `public/app.js` Content-Type mismatch; the
+   manifest expects `text/javascript; charset=utf-8`. Capture its actual type,
+   ETag, body hash and other properties. Compare **all five** deployed operations
+   files with assembled bytes before applying the plan: the planner emits upload
+   actions for them, not metadata-only repairs. Do not silently replace deployed
+   operations code with local files. Where bytes match, an explicitly approved
+   conditional metadata repair must retain those exact bytes and other required
+   properties. Where bytes differ, stop that application for review of the
+   operations revision/repair choice; a stock release does not authorize it.
+   Reconcile the app.js mismatch and read back correct metadata before delivery.
+6. Only after package, bootstrap and metadata verification, separately authorize
+   the notification merge below. Keep the operations hourly rule DISABLED.
+   Notification registration may cause a test
+   invocation; the updated handler accepts `s3:TestEvent` without publication.
+   Observe the next ordinarily persisted matching attempt and verify stock-only
+   publication receipts, metadata, ordering/failure behavior and runtime. Do not
+   generate new YATA requests or assume old objects will replay automatically.
+   Existing async retry count zero and event age 60 seconds remain unchanged;
+   duplicate/out-of-order delivery and failed or expired events mean some reports
+   may be missed until later publication. Logs and browser age/error cues remain
+   visible; do not promise one publication per acquisition.
+   Shared regional concurrency is still shared with the collector: review ordinary
+   bursts/quota and cost before activation; no concurrency change is prepared.
+7. Keep CloudFront disabled until its existing security exception, metadata and
+   explicit delivery gates pass. Preserve the accepted free, non-monetized website
+   and visible YATA attribution conditions above. Later authorized delivery must verify
+   routes, MIME types, private origin, conditional/compressed caching and measured
+   publication-to-display delay against the
+   [cache contract](dashboard.md#cloudfront-free-candidate-compatibility).
+   Association correctness alone does not resolve origin-error header differences.
+
+### Evidence-bucket notification merge
+
+Use one new entry in `LambdaFunctionConfigurations`, with a unique stable ID and
+the freshly verified **existing** unqualified publisher ARN. This fragment is an
+entry to merge, **not** a complete bucket notification replacement payload:
+
+```json
+{
+  "Id": "<dashboard-stack>-stock-publication",
+  "LambdaFunctionArn": "<verified-existing-publisher-arn>",
+  "Events": ["s3:ObjectCreated:*"],
+  "Filter": {
+    "Key": {
+      "FilterRules": [
+        {"Name": "prefix", "Value": "evidence/live-v1/"},
+        {"Name": "suffix", "Value": "/attempt.json"}
+      ]
+    }
+  }
+}
+```
+
+This includes only normalized attempt candidates, not raw bytes, forecasts or
+control paths. S3 filters are not a canonical-path validator: the handler still
+requires `evidence/live-v1/YYYY/MM/DD/HH/<32-lowercase-hex>/attempt.json` and matching
+stored identity/digest. It publishes to the separate hosting bucket, so its PUTs
+do not trigger this evidence-bucket route. No SAM S3 event, bucket import, custom
+resource or collector-template update is needed.
+
+Under later authorization, GET the **entire** current notification configuration.
+Preserve every existing Lambda, SNS, SQS and EventBridge entry, including IDs,
+filters and events, and review overlapping ObjectCreated filters and destination
+validity before adding this entry. An overlapping route, duplicate/conflicting ID
+or an unexpected existing target is a review blocker, not permission to remove it.
+Serialize notification administration with the bucket owner: refresh immediately
+before PUT and compare with the reviewed baseline; stop and re-merge if it changed.
+There is no conditional ETag update for this API. Submit the full merged writable
+configuration with the verified expected bucket owner and destination validation
+**enabled**, then GET and compare the complete configuration. Do not submit just
+this fragment, an empty configuration, or a response's `ResponseMetadata` wrapper.
+A failed validation blocks the whole update; do not bypass it. An ambiguous PUT
+requires readback before retry. Keep the exact reviewed before/after configurations
+privately, but do not blindly restore an old whole-bucket snapshot over later edits.
+See [S3 replacement and validation semantics](https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketNotificationConfiguration.html)
+and [filter overlap constraints](https://docs.aws.amazon.com/AmazonS3/latest/userguide/notification-how-to-filtering.html).
+
+### Stock integration rollback
+
+Keep delivery disabled and preserve ACTIVE FREE and all compatible associations.
+Remove **only** this stock route from a freshly captured full notification
+configuration, preserving unrelated/current entries; validate and read back the
+merged result. Stop operator replays and account for queued/in-flight async work
+and ambiguous writes before removing stock permissions or restoring older code.
+Disabling the hourly rule alone does not stop S3-triggered invocations. Retain the
+last valid stock JSON and prior static assets; do not erase evidence or force old
+JSON over newer publication. If static changes need reversal, restore only the
+reviewed prior bodies/properties conditionally while public writers are paused.
+
+Only after the route is absent and pending work reconciled may a separately
+approved dashboard rollback remove `StockPublicationPermission`, the stock-only
+IAM statements or the refreshed code. Inspect CloudFormation rollback effects
+before execution: bucket notifications live outside this stack, so stack rollback
+will **not** remove the route. A failed code/permission update must leave the route
+absent; if an active route survives a failed rollback, reconcile/remove that route
+before further rollback. Preserve existing data.json permissions, operations code
+and captured schedule state. Never roll back the collector or detach the WAF,
+restore incompatible policies or enable pay-as-you-go/public delivery.
 
 ## CloudFront Free activation boundary
 
@@ -156,9 +293,11 @@ verification. No replacement Function, service or path filter is proposed.
 
 An ACTIVE plan does **not** resolve the
 [error-response security incompatibility](dashboard.md#error-security-comparison-and-proposed-exception)
-or the [source redistribution/attribution gate](#stock-publication-activation-boundary).
-Both remain outstanding before public delivery. The exception proposal is not
-owner acceptance, and correct Function association does not prove error-header
+which remains outstanding before public delivery. The owner's accepted
+[free, non-monetized website and YATA attribution decision](#stock-publication-activation-boundary)
+is recorded above; it is not independently verified third-party permission.
+The security exception proposal is not owner acceptance, and correct Function
+association does not prove error-header
 equivalence. Preserve private S3/OAC, `/public`, the operations `index.html` root,
 collector independence and existing public publication contracts.
 
@@ -194,8 +333,9 @@ Later cloud reads/writes need their own authorization and effective permissions.
    only under separate authority. Do not modify collection, add source requests,
    enable notification wiring or publish synthetic evidence. Missing JSON, unknown
    keys, absent retained-release manifests or metadata mismatches remain blockers.
-4. Resolve redistribution/attribution and the exact error-response security
-   decision, then obtain explicit authorization for a **15-minute verification-only
+4. Preserve the accepted free, non-monetized website and visible YATA attribution
+   conditions, resolve the exact error-response security decision, then obtain
+   explicit authorization for a **15-minute verification-only
    delivery window**. Reconfirm ACTIVE FREE, the associated ACL, compatible policies,
    Function and deployed configuration before any enablement. Keep COUNT initially.
    Verify operations/stock routes, GET/HEAD, conditional/compressed responses,

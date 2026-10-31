@@ -454,6 +454,43 @@
                 {
                   "Effect": "Allow",
                   "Action": [
+                    "s3:GetObject"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "${DashboardBucket.Arn}/public/stock.json"
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:PutObject"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "${DashboardBucket.Arn}/public/stock.json"
+                  },
+                  "Condition": {
+                    "StringEquals": {
+                      "s3:if-none-match": "*"
+                    }
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:PutObject"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "${DashboardBucket.Arn}/public/stock.json"
+                  },
+                  "Condition": {
+                    "Null": {
+                      "s3:if-match": "false"
+                    }
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
                     "logs:CreateLogStream",
                     "logs:PutLogEvents"
                   ],
@@ -574,6 +611,22 @@
         },
         "SourceArn": {
           "Fn::Sub": "arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-hourly"
+        }
+      }
+    },
+    "StockPublicationPermission": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "FunctionName": {
+          "Ref": "Publisher"
+        },
+        "Action": "lambda:InvokeFunction",
+        "Principal": "s3.amazonaws.com",
+        "SourceAccount": {
+          "Ref": "AWS::AccountId"
+        },
+        "SourceArn": {
+          "Fn::Sub": "arn:${AWS::Partition}:s3:::${EvidenceBucketName}"
         }
       }
     },
