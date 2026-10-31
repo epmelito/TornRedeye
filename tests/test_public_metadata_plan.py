@@ -1,6 +1,7 @@
 """Actual packaging plus offline conditional metadata planning; no S3 clients."""
 
 from copy import deepcopy
+import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -31,7 +32,8 @@ class PublicMetadataPlanTests(unittest.TestCase):
             self.directory = package.package(root / "assembled")
         self.inventory = {"bucket": "synthetic-hosting", "prefix": "public/", "complete": True,
                           "objects": [self.obj("data.json"), self.obj("stock.json", "public,max-age=15"),
-                                      self.obj("index.html"), self.obj("stock-assets/old-87654321.js")]}
+                                      *(self.obj(name) for name in package.OPERATIONS),
+                                      self.obj("stock-assets/old-87654321.js")]}
         self.retained = {"stock-assets/old-87654321.js": {
             "CacheControl": "public,max-age=31536000,immutable", "ContentType": "text/javascript; charset=utf-8"}}
 
@@ -49,27 +51,68 @@ class PublicMetadataPlanTests(unittest.TestCase):
         self.inventory["objects"].reverse()
         self.assertEqual(result, self.make_plan())
         rows = {r["key"]: r for r in result["operations"]}
-        self.assertEqual(rows["public/data.json"]["action"], "repair")
-        self.assertEqual(rows["public/data.json"]["put_object"]["CacheControl"], "public,max-age=300")
-        self.assertEqual(rows["public/stock.json"]["action"], "verify")
+        self.assertEqual(rows["public/data.json"]["action"], "preserve")
+        self.assertEqual(rows["public/stock.json"]["action"], "preserve")
         retained = rows["public/stock-assets/old-87654321.js"]
         self.assertEqual(retained["action"], "repair")
         self.assertEqual(retained["metadata"], {"CacheControl": "public,max-age=31536000,immutable",
                                                "ContentType": "text/javascript; charset=utf-8"})
         existing = rows["public/index.html"]
-        self.assertEqual(existing["read_before_write"]["IfMatch"], '"opaque-2"')
-        self.assertEqual(existing["put_object"]["IfMatch"], '"opaque-2"')
-        self.assertTrue(existing["preserve_existing_properties"])
+        self.assertEqual(existing["action"], "preserve")
+        self.assertNotIn("put_object", existing)
+        self.assertEqual(retained["read_before_write"]["IfMatch"], '"opaque-2"')
+        self.assertEqual(retained["put_object"]["IfMatch"], '"opaque-2"')
+        self.assertTrue(retained["preserve_existing_properties"])
         added = rows["public/stock-assets/app-12345678.js"]
         self.assertEqual(added["put_object"]["IfNoneMatch"], "*")
         self.assertEqual(added["local_source"]["size"], len(b"public script"))
-        self.assertEqual(len(added["local_source"]["sha256"]), 64)
+        self.assertEqual(added["local_source"]["sha256"], hashlib.sha256(b"public script").hexdigest())
         self.assertEqual(rows["public/stock.html"]["metadata"]["CacheControl"], "public,max-age=0,must-revalidate")
         self.assertEqual(result["delete_operations"], [])
         self.assertTrue(result["dry_run"])
         self.assertTrue(result["requires_publishers_paused"])
         self.assertEqual(sorted(self.inventory["objects"], key=lambda r: r["Key"]),
                          sorted(original["objects"], key=lambda r: r["Key"]))
+
+    def test_operations_and_both_json_are_preserved_despite_metadata_differences(self):
+        preserved = {*package.OPERATIONS, "data.json", "stock.json"}
+        for obj in self.inventory["objects"]:
+            if obj["Key"][len("public/"):] in preserved:
+                obj.update(CacheControl="private,max-age=42", ContentType="application/octet-stream",
+                           Metadata={"existing": "untouched"})
+        original = deepcopy(self.inventory)
+        rows = {r["key"]: r for r in self.make_plan()["operations"]}
+        for name in preserved:
+            with self.subTest(name=name):
+                row = rows["public/" + name]
+                self.assertEqual(row["action"], "preserve")
+                self.assertEqual(row["metadata"], {"CacheControl": "private,max-age=42",
+                                                   "ContentType": "application/octet-stream"})
+                for field in ("put_object", "read_before_write", "local_source"):
+                    self.assertNotIn(field, row)
+        self.assertEqual(self.inventory, original)
+        for row in rows.values():
+            if "put_object" in row:
+                self.assertNotIn(row["key"][len("public/"):], preserved)
+
+    def test_missing_operations_objects_are_not_created_from_assembly(self):
+        self.inventory["objects"] = [obj for obj in self.inventory["objects"]
+                                     if obj["Key"][len("public/"):] not in package.OPERATIONS]
+        keys = {r["key"] for r in self.make_plan()["operations"]}
+        self.assertFalse(keys & {"public/" + name for name in package.OPERATIONS})
+
+    def test_only_stock_static_sources_upload_with_existing_object_preconditions(self):
+        self.inventory["objects"].append(self.obj("stock.html"))
+        rows = self.make_plan()["operations"]
+        uploads = {row["key"]: row for row in rows if row["action"] == "upload"}
+        self.assertEqual(set(uploads), {"public/stock.html", "public/stock-assets/FONT-LICENSE.txt",
+                                       "public/stock-assets/app-12345678.js", "public/stock-assets/app-12345678.css"})
+        self.assertEqual(uploads["public/stock.html"]["put_object"]["IfMatch"], '"opaque-2"')
+        for key, row in uploads.items():
+            if key != "public/stock.html":
+                self.assertEqual(row["put_object"]["IfNoneMatch"], "*")
+            source = (self.directory / row["local_source"]["path"]).read_bytes()
+            self.assertEqual(row["local_source"]["sha256"], hashlib.sha256(source).hexdigest())
 
     def test_unknown_private_and_manifest_keys_are_never_silently_omitted(self):
         for key in ("raw/private.bin", "public/evidence/live-v1/attempt.json", "public/stock-site-files.json",
@@ -85,7 +128,8 @@ class PublicMetadataPlanTests(unittest.TestCase):
 
     def test_incomplete_duplicate_missing_json_or_missing_preconditions_fail(self):
         for change in (lambda x: x.update(complete=False), lambda x: x.update(prefix=""),
-                       lambda x: x["objects"].pop(0), lambda x: x["objects"].append(x["objects"][0]),
+                       lambda x: x["objects"].pop(0), lambda x: x["objects"].pop(1),
+                       lambda x: x["objects"].append(x["objects"][0]),
                        lambda x: x["objects"][0].pop("ETag"), lambda x: x["objects"][0].update(Size=True)):
             inventory = deepcopy(self.inventory); change(inventory)
             with self.assertRaises(ValueError):
@@ -108,7 +152,7 @@ class PublicMetadataPlanTests(unittest.TestCase):
         files_path = self.directory / "stock-site-files.json"
         meta_path = self.directory / "stock-site-upload-metadata.json"
         files = json.loads(files_path.read_text()); meta = json.loads(meta_path.read_text())
-        for name in ("stock.json", "stock-site-files.json", "private.json"):
+        for name in ("data.json", "stock.json", "stock-site-files.json", "private.json"):
             files_path.write_text(json.dumps(files + [name]))
             meta_path.write_text(json.dumps({**meta, name: {"CacheControl": "public,max-age=15", "ContentType": "application/json"}}))
             with self.assertRaises(ValueError):

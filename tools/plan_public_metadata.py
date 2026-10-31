@@ -1,4 +1,4 @@
-"""Build a local-only S3 upload/repair plan; never create a client or execute writes."""
+"""Plan stock-only static uploads/repairs locally; never execute writes."""
 
 import argparse
 import hashlib
@@ -61,7 +61,8 @@ def plan(directory, inventory, retained_manifests=()):
         if source.is_symlink() or not source.is_file() or not source.resolve().is_relative_to(directory):
             raise ValueError("local source must be a regular file inside the assembled directory")
         body = source.read_bytes()
-        local[name] = {"path": name, "size": len(body), "sha256": hashlib.sha256(body).hexdigest()}
+        if name not in OPERATIONS:
+            local[name] = {"path": name, "size": len(body), "sha256": hashlib.sha256(body).hexdigest()}
     retained = set()
     for manifest in retained_manifests:
         if not isinstance(manifest, dict):
@@ -94,6 +95,11 @@ def plan(directory, inventory, retained_manifests=()):
     operations = []
     for name in sorted(set(local) | set(existing)):
         prior = existing.get(name)
+        if name in OPERATIONS or name in JSON_FILES:
+            operations.append({"key": "public/" + name, "action": "preserve",
+                               "metadata": {k: prior.get(k) for k in ("CacheControl", "ContentType")},
+                               "prior": {"ETag": prior["ETag"], "Size": prior["Size"]}})
+            continue
         expected = upload[name] if name in upload else metadata(name)
         matches = prior and all(prior.get(k) == v for k, v in expected.items())
         action = "upload" if name in local else "verify" if matches else "repair"

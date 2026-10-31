@@ -197,9 +197,9 @@ The origin has no website endpoint or public ACL. No access logs are enabled
 restrict scripts, styles and requests to the same origin, forbid frames and
 disable MIME sniffing; origin 4xx/5xx retain the documented
 [compatibility limitation](#cloudfront-free-candidate-compatibility). Only GET/HEAD
-are served. Operations objects use explicit five-minute cache metadata; stock
-objects follow the separate cache contract. No cookies or query parameters are
-forwarded. No invalidation on hourly updates.
+are served. Stock objects follow the separate cache contract; this stock release
+preserves existing operations objects and their metadata. No cookies or query
+parameters are forwarded. No invalidation on hourly updates.
 
 Every public field is constructed from a fixed allowlist. The operations snapshot
 exposes only validated numeric telemetry and UTC timestamps from normalized
@@ -408,7 +408,9 @@ See [rollback boundary](deployment.md#failure-and-rollback-boundary).
 
 Managed cache TTLs are 1 / 86400 / 31536000 seconds, compared with the historical
 0 / 300 / 3600. Query strings and cookies remain excluded; compressed variants
-remain supported. Explicit origin metadata is mandatory for **every served object**:
+remain supported. Stock release objects require explicit origin metadata. The
+operations rows below record their existing contract, not a requirement to repair
+or redeploy operations objects as part of the stock release:
 
 | Object | Origin Cache-Control | Expected successful-response edge TTL |
 | --- | --- | --- |
@@ -419,8 +421,11 @@ remain supported. Explicit origin metadata is mandatory for **every served objec
 | Hashed stock assets | `public,max-age=31536000,immutable` | Up to one year; retain old hashes |
 
 The packager now emits `stock-site-upload-metadata.json`, keyed by exactly the
-existing upload allowlist, with `CacheControl` and `ContentType` for each static
-object. Apply those as real S3 object properties, not `x-amz-meta-*` user metadata.
+assembly allowlist, with `CacheControl` and `ContentType` for each static object.
+Only the stock-specific subset is release input: `stock.html`, the font license
+and allowlisted hashed stock assets. Apply their metadata as real S3 object
+properties, not `x-amz-meta-*` user metadata. The five operations files remain in
+the assembly for preview; they are not uploaded by the stock release.
 Neither manifest is public content. Existing JSON metadata must be verified
 separately; static packaging does not publish JSON or repair deployed metadata.
 Missing Cache-Control can cache for a day, and an excessive value is no longer
@@ -539,12 +544,17 @@ cannot prove that `complete` is truthful. Stop publishers during capture/applica
 to avoid inventory races; never stop or modify the collector. Both public JSON
 objects must exist; missing snapshots are an activation blocker, never invented.
 
-The planner reads both generated manifests, validates exact matching key sets and
-cache/MIME values, hashes every assembled file and emits operations in sorted-key
-order. Assembled files get conditional PUT plans; existing objects require IfMatch,
-new objects IfNoneMatch `*`. Existing public JSON and retained hashed assets get
-repair or verification plans. Every existing object must be a known operations
-file, `stock.html`, one of the two JSONs, the font license, or a flat hashed
+The planner reads both generated manifests and validates matching key sets,
+cache/MIME values and regular source files. It hashes stock-specific sources and
+emits sorted-key operations. Only `stock.html` and allowlisted stock assets get
+static upload plans: existing objects require IfMatch, new objects IfNoneMatch `*`.
+The current 12-file assembly yields seven stock-specific uploads; its five
+operations files are excluded. Existing operations files and both public JSON
+objects receive `preserve` rows containing their observed metadata and no PUT or
+local replacement source, even when metadata differs from the assembly manifest.
+Missing operations files are not recreated. Retained approved stock assets still
+get conditional metadata repair or verification plans. Every existing object must
+be a known operations file, `stock.html`, one of the two JSONs, the font license, or a flat hashed
 stock asset with an approved extension explicitly listed in the current or a
 reviewed retained-release metadata manifest. Filename shape alone is insufficient.
 Pass prior reviewed release metadata using repeatable `--retained-manifest` options;
@@ -566,7 +576,11 @@ Invoke-NativeCommand python @('-m', 'tools.plan_public_metadata', '--directory',
 Review the plan's exact bucket, complete expected key set, source SHA-256/size,
 opaque ETags, actions and PUT `CacheControl`/`ContentType` before authorizing any
 application. The planner is **preparation**, not an upload executor. Authorized
-application must follow this contract:
+application must follow this contract. Preserve the six existing operations
+objects (five static files and `data.json`) unchanged, including bodies, metadata
+and the current `app.js` Content-Type. Operations maintenance is not a stock-release
+prerequisite. `stock.json` is published separately from genuine persisted evidence;
+neither JSON object may be uploaded or overwritten by this static release.
 
 1. Keep delivery disabled. Pause only public-writing triggers/invocations, wait
    for in-flight publisher writes, capture schedules/notifications and refresh
@@ -585,19 +599,24 @@ application must follow this contract:
    cannot be preserved,
    stop for review. Do not guess defaults or publish private metadata. Metadata
    repair writes back the exact fetched bytes; an assembled upload uses its
-   reviewed local bytes. Use conditional PUT, not an unconditional self-copy that
-   could overwrite a newer JSON. Permissions/tags and conditional failure handling
-   must be reviewed before execution; no executor is supplied here.
+   reviewed local bytes. These writes apply only to stock static files; never
+   write a `preserve` row or either JSON. Use conditional PUT, not an
+   unconditional self-copy that could overwrite a newer stock asset. Permissions,
+   tags and conditional failure handling must be reviewed before execution;
+   no executor is supplied here.
 3. Apply only the plan's per-key conditional requests. Any 412, missing object,
    size/hash mismatch, changed key set or uncertain write stops the entire run.
    Read back the uncertain key and reconcile receipts; never retry unconditionally.
    Retain the partial-operation journal and original properties/bodies privately
    for recovery. No canonical evidence or source data is written.
 4. Post-upload, list every `public/` page again and HEAD every expected key.
-   Require exact key-set equality with inventory union assembled keys, exact
-   planned Cache-Control/Content-Type, preserved properties/tags or explicitly
-   reviewed upload differences, and correct sizes. GET changed keys: require assembled SHA-256 or the pre-repair
-   body SHA-256 respectively. ETag is a concurrency token, not a content digest.
+   Require exact key-set equality with inventory union planned stock upload keys.
+   For stock writes require planned Cache-Control/Content-Type, preserved
+   properties/tags or explicitly reviewed upload differences, and correct sizes.
+   GET changed keys: require assembled SHA-256 or the pre-repair body SHA-256
+   respectively. For `preserve` rows verify unchanged ETag, size and captured object
+   properties; never normalize their metadata against the stock manifest. ETag is
+   a concurrency token, not a content digest.
    Confirm no manifest was published. Reinventory and verify resumed publisher
    output still uses the existing 15/300-second JSON metadata. Do not enable
    CloudFront until these checks and the separate Free/security gates pass.
@@ -706,13 +725,14 @@ stack's evidence bucket, function, log group, metric namespace and SNS **topic n
 (not its ARN). For infrastructure updates, inspect existing resources, parameters
 and scheduling before preparing a change set. Do not update the collector stack.
 Use the assembled `.aws-sam/stock-site/` output, not raw source, for a reviewed
-frontend release. Its generated `stock-site-files.json` lists the operations files,
-`stock.html` and external hashed `stock-assets/` files (including font/license).
-Upload only those listed paths to corresponding `public/` keys, applying the generated
-upload metadata as object properties. Do not upload either manifest.
-Retain five-minute caching for operations assets; revalidate the stock HTML
-and use immutable caching for hashed stock assets. Retain older hashed assets for
-cached HTML references. Do not upload the manifest or any preview JSON/evidence. Do not upload
+stock release. Its generated `stock-site-files.json` includes five operations
+files for preview, plus `stock.html` and six `stock-assets/` files in the current
+release (including font/license). Upload only those seven stock-specific files
+selected by the planner, applying their generated metadata as object properties.
+Preserve the six existing operations objects without body or metadata changes,
+including `app.js` Content-Type. Do not upload either manifest or either JSON.
+Revalidate the stock HTML and use immutable caching for hashed stock assets.
+Retain older hashed assets for cached HTML references. Do not upload the manifest or any preview JSON/evidence. Do not upload
 repository source or evidence. Verify all four direct routes, navigation,
 snapshot loading and cache behavior after an authorized update. Initial bootstrap
 also requires authorized publisher invocation and verification of private S3 /
