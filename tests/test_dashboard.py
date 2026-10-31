@@ -358,15 +358,44 @@ class DashboardInfrastructureTests(unittest.TestCase):
         self.assertEqual(actions, {"cloudwatch:GetMetricStatistics", "logs:FilterLogEvents", "s3:GetObject", "s3:PutObject", "logs:CreateLogStream", "logs:PutLogEvents"})
         for s in statements:
             if "s3:PutObject" in s["Action"]:
-                self.assertEqual(s["Resource"], {"Fn::Sub": "${DashboardBucket.Arn}/public/data.json"})
+                self.assertIn(s["Resource"], [{"Fn::Sub": "${DashboardBucket.Arn}/public/" + name}
+                                              for name in ("data.json", "stock.json")])
                 self.assertIn("Condition", s)
         self.assertNotIn("control/", json.dumps(statements))
         reads = [s for s in statements if "s3:GetObject" in s["Action"]]
-        self.assertEqual(len(reads), 2)
+        self.assertEqual(len(reads), 3)
         self.assertIn("/evidence/live-v1/*/attempt.json", reads[0]["Resource"][0]["Fn::Sub"])
         types = {r["Type"] for r in self.resources.values()}
         self.assertNotIn("AWS::CloudWatch::Alarm", types)
         self.assertNotIn("AWS::Logs::MetricFilter", types)
+
+    def test_public_json_permissions_require_create_or_compare_and_swap_on_exact_keys(self):
+        statements = self.resources["PublisherRole"]["Properties"]["Policies"][0]["PolicyDocument"]["Statement"]
+        writes = [s for s in statements if "s3:PutObject" in s["Action"]]
+        self.assertEqual(len(writes), 4)
+        for name in ("data.json", "stock.json"):
+            resource = {"Fn::Sub": "${DashboardBucket.Arn}/public/" + name}
+            with self.subTest(key=name):
+                reads = [s for s in statements if s["Resource"] == resource and "s3:GetObject" in s["Action"]]
+                self.assertEqual(reads, [{"Effect": "Allow", "Action": ["s3:GetObject"], "Resource": resource}])
+                actual = [s for s in writes if s["Resource"] == resource]
+                expected = [{"Effect": "Allow", "Action": ["s3:PutObject"], "Resource": resource,
+                             "Condition": condition} for condition in (
+                                 {"StringEquals": {"s3:if-none-match": "*"}},
+                                 {"Null": {"s3:if-match": "false"}})]
+                self.assertCountEqual(actual, expected)
+
+    def test_stock_invocation_is_bounded_to_evidence_bucket_account_without_activating_events(self):
+        permissions = [r["Properties"] for r in self.resources.values()
+                       if r["Type"] == "AWS::Lambda::Permission" and r["Properties"]["Principal"] == "s3.amazonaws.com"]
+        self.assertEqual(permissions, [{
+            "FunctionName": {"Ref": "Publisher"}, "Action": "lambda:InvokeFunction",
+            "Principal": "s3.amazonaws.com", "SourceAccount": {"Ref": "AWS::AccountId"},
+            "SourceArn": {"Fn::Sub": "arn:${AWS::Partition}:s3:::${EvidenceBucketName}"}}])
+        self.assertNotIn("Events", self.resources["Publisher"]["Properties"])
+        self.assertNotIn("NotificationConfiguration", self.resources["DashboardBucket"]["Properties"])
+        self.assertEqual([name for name, r in self.resources.items() if r["Type"] == "AWS::S3::Bucket"],
+                         ["DashboardBucket"])
 
     def test_hourly_disabled_schedule_bounded_runtime_no_retries_or_reserved_quota(self):
         function = self.resources["Publisher"]["Properties"]
