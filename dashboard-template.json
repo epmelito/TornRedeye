@@ -30,6 +30,30 @@
         "DISABLED",
         "ENABLED"
       ]
+    },
+    "FreePlanCandidate": {
+      "Type": "String",
+      "Default": "DISABLED",
+      "AllowedValues": [
+        "DISABLED",
+        "ENABLED"
+      ],
+      "Description": "Review gated candidate; origin error security headers are NOT equivalent. No subscription is created."
+    },
+    "DistributionEnabled": {
+      "Type": "String",
+      "Default": "true",
+      "AllowedValues": [
+        "true",
+        "false"
+      ],
+      "Description": "Keep false throughout protection activation and rollback until verified."
+    },
+    "WebAclArn": {
+      "Type": "String",
+      "Default": "",
+      "AllowedPattern": "^$|^arn:aws:wafv2:us-east-1:[0-9]{12}:global/webacl/[A-Za-z0-9_-]+/[a-f0-9-]+$",
+      "Description": "Dedicated CLOUDFRONT ACL ARN; association remains owned by this stack."
     }
   },
   "Rules": {
@@ -45,6 +69,33 @@
             ]
           },
           "AssertDescription": "Deploy regional dashboard components in Stockholm"
+        }
+      ]
+    },
+    "CandidateRequiresWebAcl": {
+      "RuleCondition": {
+        "Fn::Equals": [
+          {
+            "Ref": "FreePlanCandidate"
+          },
+          "ENABLED"
+        ]
+      },
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "WebAclArn"
+                  },
+                  ""
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "Candidate requires a dedicated CLOUDFRONT ACL before subscription."
         }
       ]
     }
@@ -153,9 +204,21 @@
       "Type": "AWS::CloudFront::Distribution",
       "Properties": {
         "DistributionConfig": {
-          "Enabled": true,
+          "Enabled": {
+            "Fn::If": [
+              "DeliveryEnabled",
+              true,
+              false
+            ]
+          },
           "DefaultRootObject": "index.html",
-          "PriceClass": "PriceClass_100",
+          "PriceClass": {
+            "Fn::If": [
+              "UseFreePlanCandidate",
+              "PriceClass_All",
+              "PriceClass_100"
+            ]
+          },
           "HttpVersion": "http2",
           "IPV6Enabled": true,
           "ViewerCertificate": {
@@ -192,11 +255,53 @@
             ],
             "Compress": true,
             "CachePolicyId": {
-              "Ref": "CachePolicy"
+              "Fn::If": [
+                "UseFreePlanCandidate",
+                "658327ea-f89d-4fab-a63d-7e88639e58f6",
+                {
+                  "Ref": "CachePolicy"
+                }
+              ]
             },
             "ResponseHeadersPolicyId": {
-              "Ref": "SecurityHeaders"
+              "Fn::If": [
+                "UseFreePlanCandidate",
+                "67f7725c-6f97-4210-82d7-5512b31e9d03",
+                {
+                  "Ref": "SecurityHeaders"
+                }
+              ]
+            },
+            "FunctionAssociations": {
+              "Fn::If": [
+                "UseFreePlanCandidate",
+                [
+                  {
+                    "EventType": "viewer-response",
+                    "FunctionARN": {
+                      "Fn::GetAtt": [
+                        "ViewerSecurityHeaders",
+                        "FunctionARN"
+                      ]
+                    }
+                  }
+                ],
+                {
+                  "Ref": "AWS::NoValue"
+                }
+              ]
             }
+          },
+          "WebACLId": {
+            "Fn::If": [
+              "HasWebAcl",
+              {
+                "Ref": "WebAclArn"
+              },
+              {
+                "Ref": "AWS::NoValue"
+              }
+            ]
           }
         }
       }
@@ -471,6 +576,21 @@
           "Fn::Sub": "arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/${AWS::StackName}-hourly"
         }
       }
+    },
+    "ViewerSecurityHeaders": {
+      "Type": "AWS::CloudFront::Function",
+      "Condition": "UseFreePlanCandidate",
+      "Properties": {
+        "Name": {
+          "Fn::Sub": "${AWS::StackName}-viewer-security"
+        },
+        "AutoPublish": true,
+        "FunctionConfig": {
+          "Comment": "Successful responses only; origin >=400 bypasses viewer response functions",
+          "Runtime": "cloudfront-js-2.0"
+        },
+        "FunctionCode": "function handler(event) {\n    var response = event.response;\n    var headers = response.headers;\n    headers['content-security-policy'] = { value: \"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'\" };\n    headers['x-frame-options'] = { value: 'DENY' };\n    headers['referrer-policy'] = { value: 'no-referrer' };\n    headers['strict-transport-security'] = { value: 'max-age=31536000' };\n    headers['x-content-type-options'] = { value: 'nosniff' };\n    delete headers['x-xss-protection'];\n    return response;\n}\n"
+      }
     }
   },
   "Outputs": {
@@ -488,6 +608,46 @@
       "Value": {
         "Ref": "Publisher"
       }
+    },
+    "DistributionId": {
+      "Value": {
+        "Ref": "Distribution"
+      }
+    },
+    "DistributionArn": {
+      "Value": {
+        "Fn::Sub": "arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${Distribution}"
+      }
+    }
+  },
+  "Conditions": {
+    "UseFreePlanCandidate": {
+      "Fn::Equals": [
+        {
+          "Ref": "FreePlanCandidate"
+        },
+        "ENABLED"
+      ]
+    },
+    "HasWebAcl": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "WebAclArn"
+            },
+            ""
+          ]
+        }
+      ]
+    },
+    "DeliveryEnabled": {
+      "Fn::Equals": [
+        {
+          "Ref": "DistributionEnabled"
+        },
+        "true"
+      ]
     }
   }
 }

@@ -2,7 +2,8 @@
 
 Architecture assessment for [Issue #17](https://github.com/epmelito/TornRedeye/issues/17).
 Research verified **2026-10-11**; proposals below are not approved deployments.
-No resources, schedules, account plans, subscriptions or evidence were changed.
+No resources, schedules, account plans, subscriptions or evidence were changed
+by that assessment. Later operator-verified hosting state is recorded below.
 
 This is a date-scoped assessment, not current operational status. Subsequent
 backup activation and recovery verification are recorded in
@@ -12,22 +13,19 @@ success does not establish their implementation or the publisher's enabled state
 
 ## Recommendation
 
-First establish a verified backup outside this AWS account. Then target
-**CloudFront Free flat-rate hosting**, conditional on account eligibility and
-security compatibility verification. Keep the existing private S3 origin,
-sanitized snapshot and bounded hourly publisher. Before any account upgrade,
-disable public pay-as-you-go delivery and verify that the disable has propagated.
-Keep publication disabled until separately approved.
+The [operator-verified hosting record](deployment.md#verified-hosting-state-and-ownership)
+documents ACTIVE console-owned CloudFront FREE coverage, the existing WAF and
+disabled delivery. Preserve that coverage and disabled delivery while resolving the
+error-response security and source-redistribution gates; do not create or import
+another subscription.
 
-CloudFront Free is not available to the current Free account and is not a
-drop-in replacement for its custom policies. Do not upgrade simply to discover
-whether migration works. Prepare the change offline, approve its prerequisites,
-then perform a protected transition. If compatibility or eligibility fails,
-leave public delivery disabled; assess GitHub Pages rather than buying a
-larger AWS plan by default. Availability of a portfolio dashboard is secondary
-to preserving evidence and avoiding uncontrolled charges.
+The October 11 FREE-account/credit baseline below remains historical evidence;
+it does not establish current account plan, remaining credits or publisher state.
+The earlier proposed account/hosting transition is no longer the current
+subscription-creation procedure. Current maintenance and rollback boundaries
+are recorded in deployment; no new account upgrade or paid-tier fallback is proposed.
 
-## Evidence and current risks
+## Historical evidence and risks (2026-10-11)
 
 **User-supplied verified AWS baseline, 2026-10-11:** region `eu-north-1`,
 account plan `FREE`/`ACTIVE`, remaining credits **$139.96**, expiration
@@ -59,14 +57,19 @@ by these contracts govern existing behavior. Historical deployment statements
 in those documents are not evidence of current live configuration: verify live
 lifecycle, retention, permissions and collector schedule before migration.
 
-**Material risks:** public requests can consume credits now and incur uncapped
-usage charges after upgrade; cache misses also reach S3. Account closure can
+**Material risks at that baseline:** public pay-as-you-go requests could consume
+credits and incur uncapped usage charges after upgrade; cache misses also reach S3. Account closure can
 make all evidence inaccessible. Stack retention does not prevent privileged
 deletion, lifecycle expiration, corruption or account-level deletion. Exact
 archive size, historical losses, current request volume, credit expiry details
 and account-wide remaining allowances are unavailable here.
 
-## Account transition
+## Historical account-transition assessment (2026-10-11)
+
+This section preserves the October 11 assessment, not a current transition
+procedure. The AWS account billing plan is separate from a CloudFront FREE
+subscription; the later hosting observations do not establish current account
+plan or credit balances.
 
 AWS's [account-plan documentation](https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/free-tier-plans.html)
 states that Free accounts close at six months **or earlier credit exhaustion**.
@@ -83,16 +86,19 @@ describes activity-credit expiry 12 months after account creation. Check each
 credit's actual expiry and eligible services in Billing; do not infer an expiry
 date from the six-month account deadline or assume credits cover plan purchases.
 
-While still Free, prepare compatibility changes, export/recovery tooling,
-independent backups and operator procedures; inspect existing metrics and account
-credit notices. Budget availability/permissions must be confirmed. A paid-account
-upgrade and flat-rate subscription require later approval and verified
-eligibility; [PricingPlanManager](https://docs.aws.amazon.com/PricingPlanManager/latest/UserGuide/plans.html)
-explicitly excludes Free Tier accounts.
+The October 11 proposal was to prepare compatibility changes, export/recovery
+tooling, independent backups and operator procedures while still on the Free
+account plan, with budget permissions confirmed. Account upgrade and subscription
+creation were then subject to later approval and eligibility verification;
+[PricingPlanManager](https://docs.aws.amazon.com/PricingPlanManager/latest/UserGuide/plans.html)
+excluded Free Tier accounts in that assessment. The later console-created ACTIVE
+subscription supersedes that prospective creation step; do not create another.
 
 ## Hosting options and cost exposure
 
-USD estimates exclude taxes, credits and uncertain account allowances. They are
+The following October 11 alternatives preserve the historical comparison; the
+FREE row's conditional-target wording is not a description of today's recorded
+hosting state. USD estimates exclude taxes, credits and uncertain account allowances. They are
 scenarios, not current bills, traffic forecasts or account-wide ceilings.
 
 | Approach | Approximate exposure | Limitations and judgment |
@@ -136,60 +142,62 @@ excess can degrade delivery. Other CloudWatch storage/queries and additional
 metrics are excluded; Lambda@Edge and unrelated services remain chargeable.
 
 Pro is $15/month and still lacks the custom policies; Business is $200/month.
-Neither is proportionate merely to preserve two current policies. Verify the
-actual subscription offer, eligible resources and exclusions before accepting it.
+Neither was proportionate merely to preserve the two historical custom policies.
+Before future operations, freshly verify the existing subscription's eligible
+resources and exclusions; this comparison authorizes no new subscription.
 
-Recommended compatibility design, **not yet implemented or live-tested**:
+Issue #75's local candidate was prepared on **2026-10-29**, corrected for the
+byte-match rejection on **2026-10-30**, and reconciled to the operator-verified
+ACTIVE FREE state on **2026-10-31**. The dashboard condition now selects
+PriceClass_All in FREE mode; PriceClass_100 and custom policy resources remain
+historical/noncandidate template settings, not authorized rollback choices while
+FREE remains active. The [dashboard compatibility contract](dashboard.md#cloudfront-free-candidate-compatibility)
+owns cache/security behavior, and the [deployment procedure](deployment.md#cloudfront-free-activation-boundary)
+owns verified state, console ownership, remaining gates and rollback boundaries.
 
-1. Preserve private encrypted S3, TLS-only access, distribution-scoped OAC reads,
-   HTTPS-only visitors and the existing publisher/evidence IAM boundaries. Do not
-   make S3 public, expose evidence, add viewer API calls or change YATA polling.
-2. Replace the custom cache policy with managed `CachingOptimized`. Its defaults
-   differ (one-second minimum, one-day default, one-year maximum). Preserve
-   explicit `Cache-Control: public,max-age=300` on JSON and set deliberate cache
-   metadata on every static asset; otherwise freshness changes. No query strings
-   or cookies enter its cache key. Verify replacement JSON becomes visible within
-   the intended cache interval and stale indication still works; avoid hourly
-   invalidations. [Managed cache policies](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/using-managed-cache-policies.html).
-3. Use managed `SecurityHeadersPolicy` plus one distribution-exclusive viewer
-   response CloudFront Function to retain the exact current CSP, `DENY` framing,
-   `no-referrer`, HSTS and `nosniff` on successful content. The managed policy
-   alone has **no CSP**, uses `SAMEORIGIN` and a different referrer policy.
-   AWS demonstrates [security headers in Functions](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/example_cloudfront_functions_add_security_headers_section.html);
-   [managed response headers](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/using-managed-response-headers-policies.html)
-   provide the baseline. Keep the function without network access, state or routine
-   request logging. Verify plan acceptance and header ordering; this is a proposed
-   supported composition, not proof of live compatibility.
-4. **Error-response security is an unresolved approval gate:** viewer response
-   functions do not run for origin HTTP status >=400. Check missing paths,
-   blocked requests, conditional responses and normal assets. Managed headers
-   remain the fallback, but exact existing CSP/framing/referrer behavior is not
-   guaranteed on errors. Do not silently relax the contract or substitute an HTML
-   meta CSP (which cannot replace all header directives). Either approve a bounded
-   error-response difference after review, demonstrate an equivalent supported
-   design, or reject this target. [Edge-function restrictions](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/edge-function-restrictions-all.html).
-5. Attach a dedicated `CLOUDFRONT`-scope WAFv2 ACL in `us-east-1`; propose a
-   supported exact-path restriction for the four public objects/root and an IP
-   rate rule. Verify rule support/order and normal mobile clients before enforcing.
-   Rate thresholds need measured baseline and owner approval; NAT/shared clients
-   can be blocked and botnets are not bounded by one IP rule.
+Private S3/OAC, the operations root, managed policies, viewer-response Function
+and existing WAF association are preserved. The byte-match rule is verified
+removed live. This loses COUNT-only diagnostics, not enforced blocking. The
+remaining local native IP rate rule defaults to COUNT and does not reduce misses.
 
-Keep regional application stacks in Stockholm. Manage global WAF and subscription
-in a small `us-east-1` protection stack referencing the existing distribution;
-the dashboard stack continues to own the distribution and its associations.
-Avoid a second public distribution, domain/DNS service or cross-region origin.
-The [PricingPlanManager API guide](https://docs.aws.amazon.com/PricingPlanManager/latest/UserGuide/getting-started-pricingplanmanager-api.html)
-requires an existing ACL; it does not create one. Free cancellation is immediate.
+**ACTIVE FREE is not security-equivalence approval:** origin errors still bypass
+the Function, and error CSP/framing/referrer differences remain unresolved.
+Keep public delivery disabled until the explicit security and source-redistribution
+gates are satisfied. Reattaching incompatible custom policies or detaching WAF
+while FREE remains active is not an authorized rollback. No meta CSP, status-200
+error remapping, replacement service or separately billed Lambda@Edge is introduced.
 
-[CloudFormation supports `AWS::PricingPlanManager::Subscription`](https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-pricingplanmanager-subscription.html),
-including existing distribution/ACL ARNs. Free activates automatically; paid
-subscriptions require separate approval and pending subscriptions leave resources
-on pay-as-you-go. Tier/usage changes cannot be made through ordinary stack updates.
-Model resource ownership/dependencies explicitly, verify registry/tool support,
-and reconcile any console changes into templates instead of claiming drift-free
-operation. Subscription deletion/stack rollback can remove protection; disable
-delivery first and retain the subscription during unrelated teardown until an
-approved cancellation. Do not rely on ambiguous deletion timing as a safeguard.
+The subscription was created through the console and is outside CloudFormation.
+Its unused local creation template and exclusive test have been removed; no runtime
+or recovery dependency required them. Earlier offline schema/lint findings are
+preserved as [dated validation evidence](dashboard.md#publisher-and-infrastructure-validation),
+not as current instructions to create/import a subscription or expand creation
+permissions. The existing dashboard stack still owns distribution associations;
+the ACL template remains separate. The existing ACL was confirmed to belong to
+the deployed `tornredeye-cloudfront-waf` stack in `us-east-1`; its successful
+update and current single COUNT rate rule were independently verified. Require
+fresh verification before future operations rather than treating this evidence
+as a permanent guarantee of current state.
+
+Expected **included** delivery/protection price is $0/month under the reported
+ACTIVE FREE coverage for the existing distribution and associated ACL. This does
+not cap the account's $5 budget. S3 origin GET/PUT, publication/collector Lambda, evidence and
+artifact storage, logs and unrelated services remain variable. One continuously
+visible stock tab makes about 86,400 polls in 30 days before failures/latency;
+roughly 11.6 such tabs consume 1M requests before other routes/assets. This is an
+arithmetic scenario, not a traffic forecast. More edge locations/variants and
+malicious unique paths can increase billable S3 misses even under the plan.
+
+If coverage is lost, cancelled or a resource becomes orphaned, the one-rule WAF
+has a reference standalone baseline of **$6/month** ($5 ACL + $1 rule), prorated
+hourly, plus $0.60/million inspected requests. That is residual exposure, not a
+claim of current standalone WAF billing under ACTIVE FREE. COUNT does not remove
+fees outside coverage. Disabling delivery or detaching WAF does not delete its
+billable resources; do not detach it from the active plan. A separately approved
+cancellation transition would need verified coverage state, disabled delivery and
+explicit ACL cleanup ownership. The earlier 30-minute bridge was planning, not a
+current activation step or a hard cost cap. Budget notices are delayed alerts,
+not a spending cap. [WAF pricing reference](https://aws.amazon.com/waf/pricing/).
 
 ## Whole-project consumption and monitoring
 
@@ -252,50 +260,22 @@ subscription fee; cancellation can return associated resources to pay-as-you-go.
 
 ## Controlled migration and rollback
 
-All steps involving AWS writes, evidence export or account changes below require
-their own approved implementation work; none were performed for Issue #17.
+The October 11 assessment proposed an account transition, WAF setup and later
+subscription creation, with future planning milestones of February 28 and
+March 15, 2027 against the then-recorded credit expiry. Those were proposals,
+not performed operations or current deadlines. The dated account/credit evidence
+above is preserved; the October 31 ACTIVE console-created subscription supersedes
+that prospective creation sequence. Do not repeat it or apply historical account
+assumptions to the current account.
 
-1. **Immediately after approval:** inventory account/credits and live retention,
-   establish verified external backup and test recovery. Agree recurring cost,
-   acceptable downtime, error-header behavior, traffic thresholds and backup RPO.
-   Freeze changes that trigger an automatic paid upgrade.
-2. **By 2027-02-28, or earlier if credits fall:** finish offline templates/tests
-   and eligibility preflight, including historical usage, available Free slots,
-   unsupported/shared resource associations and deployment tooling. A full live
-   eligibility check may only succeed after upgrade; approval must accept that
-   uncertainty and the shutdown fallback. Prepare operator/rollback instructions
-   and refresh the backup before any irreversible transition.
-3. **Explicit approval gate A:** approve a public outage and disable the current
-   distribution while still Free; confirm deployed disabled state and cessation
-   of delivery. Leave S3 private and publication DISABLED. Account upgrade does
-   not wait for an alert to protect an enabled public endpoint.
-4. **Explicit approval gate B:** approve paid-account transition and temporary
-   origin/WAF costs; confirm payment/credit terms, then upgrade. Keep delivery
-   disabled through incompatible-policy replacement, WAF attachment and
-   subscription creation. ACL charges may apply before activation; distribution
-   changes/subscription synchronization are not atomic.
-5. Verify subscription **ACTIVE**, current tier **FREE**, correct distribution
-   and ACL association, no pending paid/cancellation change, and distribution
-   deployment completed. Inspect included/excluded usage in Billing later.
-   Stack completion or a $0 estimate alone does not prove financial protection.
-6. **Explicit approval gate C:** enable delivery for bounded browser/security
-   checks, verify private origin denial, headers, hourly replacement/cache
-   behavior and valid partial/stale JSON. Publisher invocation and hourly
-   enablement require separate approval; preserve collector behavior throughout.
-   If any protection/security check fails, disable delivery again.
-7. **By 2027-03-15:** either complete the protected transition, select the approved
-   alternative, or keep public hosting shut down and finish evidence-continuity
-   preparations. Do not wait until April 8 or assume credits last until then.
-
-Rollback preserves the external backup, evidence bucket and disabled publisher.
-Retain an active Free subscription where possible; cancel/remove it only after
-delivery is disabled because cancellation can restore pay-as-you-go exposure.
-Do not silently re-enable pay-as-you-go, detach WAF or upgrade to Pro/Business.
-Restore prior templates only with separately approved risk and ownership checks.
-No reversible migration step reverses the paid-account financial obligations;
-if no upgrade is approved, complete backups and plan a collection interruption
-before account closure. Continuing evidence collection beyond expiry requires
-an approved funded account or a separate approved collection migration.
+Use the [current failure and rollback boundary](deployment.md#failure-and-rollback-boundary):
+keep delivery disabled, retain ACTIVE FREE, its WAF association, managed policies,
+Function and PriceClass_All. Reverting to incompatible custom policies or detaching
+WAF while FREE remains active is not authorized. Console subscription lifecycle
+is independent of dashboard stack rollback. Do not create or import another
+subscription. Cancellation, account changes or pay-as-you-go public delivery require separate explicit owner
+authorization; none is a default recovery action. Preserve backup, evidence,
+collector independence and current publication permissions throughout.
 
 ## Evidence continuity and recovery requirements
 
@@ -375,17 +355,18 @@ still exists, not recovery of evidence already expired before retention changes.
 2. **Low-cost operator protection:** configure approved private budget/credit
    notices, two traffic alarms and manual disable procedure; validate destinations
    and price/allowance eligibility. No automatic destructive response.
-3. **CloudFront Free compatibility:** prepare managed caching, security Function,
-   global WAF/subscription templates and lifecycle tests. Resolve error-response
-   approval and confirm account eligibility; reject paid-tier substitutions.
-4. **Protected account/hosting transition:** execute only after independent review
-   and gates A-C; preserve the disabled publisher until separately approved.
-   If rejected, scope GitHub Pages/manual sanitized publication independently.
+3. **CloudFront Free compatibility:** the operator reports ACTIVE console-owned
+   FREE with the correct managed policies/Function/WAF and disabled delivery.
+   Review the local PriceClass reconciliation and resolve error-response approval;
+   do not recreate/import the subscription or substitute a paid tier.
+4. **Public delivery decision:** retain disabled delivery until independent review,
+   source-redistribution clearance, security acceptance and explicit enablement
+   authorization. Keep collection and publication permissions unchanged.
 
-Outstanding decisions are those approval gates, error-response equivalence,
-backup RPO/storage ownership and affordable recurring cost. Live eligibility,
-tooling/region support, policy drift, actual usage and credit terms remain
-implementation prerequisites. All external references above were consulted on
+Outstanding decisions include public-delivery security/redistribution gates,
+backup RPO/storage ownership and affordable recurring cost. Current account/credit
+terms, complete configuration drift and actual usage were not supplied; ACTIVE
+FREE does not establish those facts. All external references above were consulted on
 2026-10-11, except the explicitly inherited 2026-10-10 regional rate evidence;
 reverify before migration. This document is a proposal and does not supersede
 the existing operating contracts or authorize any live action.

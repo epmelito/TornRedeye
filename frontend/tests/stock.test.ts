@@ -70,6 +70,41 @@ function harness() {
   };
 }
 
+test('15-second edge cache plus actual polling reveals replacement and retains source age', async () => {
+  // A deterministic cache model, not an AWS measurement. Other viewers may refill the edge.
+  const epoch = Date.parse(fixture.published_at_utc);
+  for (const publishAt of [1, 14999, 15001, 29999]) {
+    let time = 0, serial = 0, cached = copy(), expires = 15000;
+    const replacement = copy();
+    replacement.published_at_utc = new Date(epoch + publishAt).toISOString();
+    replacement.retrieved_at_utc = replacement.published_at_utc;
+    const sourceTime = replacement.countries[0].source_timestamp_utc;
+    const timers = new Map<number, {at: number; fn: () => void}>();
+    const feed = createFeed({now: () => epoch + time, visible: () => true,
+      later: (fn, ms) => { timers.set(++serial, {at: time + ms, fn}); return serial as unknown as ReturnType<typeof setTimeout>; },
+      cancel: id => { timers.delete(id as unknown as number); },
+      fetch: (async () => {
+        if (time >= expires) { cached = time >= publishAt ? replacement : copy(); expires = time + 15000; }
+        return new Response(JSON.stringify(cached), {status: 200});
+      }) as typeof fetch,
+    });
+    feed.start(); await new Promise(setImmediate);
+    assert.equal(feed.state().snapshot?.published_at_utc, fixture.published_at_utc);
+    // Refill just before replacement to exercise a stale cache hit on the next poll.
+    if (publishAt > 15000) { expires = publishAt - 1 + 15000; }
+    for (let second = 1; second <= 75; second++) {
+      time = second * 1000;
+      for (const [id, t] of [...timers]) if (t.at <= time) { timers.delete(id); t.fn(); }
+      await new Promise(setImmediate);
+      if (feed.state().snapshot?.published_at_utc === replacement.published_at_utc) break;
+    }
+    assert.ok(time - publishAt <= 45000, `publication delay ${time - publishAt}`);
+    assert.equal(feed.state().snapshot?.published_at_utc, replacement.published_at_utc);
+    assert.equal(feed.state().snapshot?.countries[0].source_timestamp_utc, sourceTime);
+    feed.stop();
+  }
+});
+
 test('one relative, bounded request at a time; failed refresh retains the last snapshot and older reports cannot replace it', async () => {
   const h = harness(), first = h.feed.refresh();
   await h.feed.refresh(); assert.equal(h.calls.length, 1); assert.equal(h.calls[0].url, 'stock.json'); assert.equal(h.calls[0].cache, 'no-cache');
