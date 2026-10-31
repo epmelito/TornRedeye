@@ -1,0 +1,125 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Dedicated CloudFront WAF candidate; separate from subscription; no deployment authorization",
+  "Parameters": {
+    "ProvisionWebAcl": {
+      "Type": "String",
+      "Default": "DISABLED",
+      "AllowedValues": [
+        "DISABLED",
+        "ENABLED"
+      ]
+    },
+    "RateAction": {
+      "Type": "String",
+      "Default": "COUNT",
+      "AllowedValues": [
+        "COUNT",
+        "BLOCK"
+      ],
+      "Description": "BLOCK requires reviewed traffic baseline and error response security decision"
+    },
+    "RequestsPerFiveMinutes": {
+      "Type": "Number",
+      "Default": 3000,
+      "MinValue": 10,
+      "MaxValue": 2000000000,
+      "Description": "Per source IP across all paths; illustrative count threshold, not an approved blocking threshold"
+    }
+  },
+  "Rules": {
+    "VirginiaOnly": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Equals": [
+              {
+                "Ref": "AWS::Region"
+              },
+              "us-east-1"
+            ]
+          },
+          "AssertDescription": "CLOUDFRONT ACLs must be managed in us-east-1"
+        }
+      ]
+    }
+  },
+  "Conditions": {
+    "CreateWebAcl": {
+      "Fn::Equals": [
+        {
+          "Ref": "ProvisionWebAcl"
+        },
+        "ENABLED"
+      ]
+    },
+    "EnforceRate": {
+      "Fn::Equals": [
+        {
+          "Ref": "RateAction"
+        },
+        "BLOCK"
+      ]
+    }
+  },
+  "Resources": {
+    "WebAcl": {
+      "Type": "AWS::WAFv2::WebACL",
+      "Condition": "CreateWebAcl",
+      "Properties": {
+        "Scope": "CLOUDFRONT",
+        "Description": "Exclusive to the existing TornRedeye dashboard distribution",
+        "DefaultAction": {
+          "Allow": {}
+        },
+        "VisibilityConfig": {
+          "SampledRequestsEnabled": false,
+          "CloudWatchMetricsEnabled": true,
+          "MetricName": "TornRedeyeWebAcl"
+        },
+        "Rules": [
+          {
+            "Name": "SourceIpRate",
+            "Priority": 1,
+            "Action": {
+              "Fn::If": [
+                "EnforceRate",
+                {
+                  "Block": {}
+                },
+                {
+                  "Count": {}
+                }
+              ]
+            },
+            "Statement": {
+              "RateBasedStatement": {
+                "AggregateKeyType": "IP",
+                "EvaluationWindowSec": 300,
+                "Limit": {
+                  "Ref": "RequestsPerFiveMinutes"
+                }
+              }
+            },
+            "VisibilityConfig": {
+              "SampledRequestsEnabled": false,
+              "CloudWatchMetricsEnabled": true,
+              "MetricName": "TornRedeyeSourceIpRate"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "Outputs": {
+    "WebAclArn": {
+      "Condition": "CreateWebAcl",
+      "Value": {
+        "Fn::GetAtt": [
+          "WebAcl",
+          "Arn"
+        ]
+      }
+    }
+  }
+}

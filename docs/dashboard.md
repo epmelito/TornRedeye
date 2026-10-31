@@ -47,9 +47,10 @@ the affected comparison. Reports skipped by publication failure and gaps may hid
 changes: these are not sales counts, confirmed restocks or exact event times.
 No historical archive scan is required per update or visitor.
 
-The browser fetches only relative `stock.json` on load and every 30 seconds while
-visible, with an eight-second request timeout, one outstanding fetch, and immediate
-rechecking on return to the tab. Failed or invalid updates retain the last received
+The browser fetches only relative `stock.json` on load and schedules the next check
+30 seconds after each completed refresh while visible, with an eight-second
+request timeout, one outstanding fetch, and immediate rechecking on return to the
+tab. Failed or invalid updates retain the last received
 snapshot with an error notice and aging timestamps. An initial failure displays
 unavailable. Query-based item/country, search, sort, availability and section
 selections survive refresh without SPA rewrite rules; legacy country hash links
@@ -107,11 +108,13 @@ keyboard controls, error states, refresh and both URL base paths. A passing buil
 or fake-DOM check does not establish rendered quality. Static release remains
 separately authorized.
 
-Publication sets `Cache-Control: public,max-age=15`. The existing CloudFront policy
-has MinTTL 0, DefaultTTL 300 and MaxTTL 3600: the explicit stock header can override
-the default without changing operations JSON or asset caching. Browser `no-cache`
-requests revalidation; they do not bypass a still-fresh shared CDN object. Query
-parameters are excluded from the cache key, so cache-busting URLs are not used.
+Publication sets `Cache-Control: public,max-age=15`. FREE mode uses the managed
+policy described in the [cache contract](#cloudfront-free-candidate-compatibility);
+the custom MinTTL 0, DefaultTTL 300 and MaxTTL 3600 policy is historical/noncandidate
+configuration. Explicit origin metadata controls stock and operations freshness.
+Browser `no-cache` requests revalidation; it does not bypass a still-fresh shared
+CDN object. Query parameters are excluded from the cache key, so cache-busting
+URLs are not used.
 A controlled fake-clock test measures 44 seconds from publication to display when
 another visitor fills the shared cache immediately before publication. The ideal
 15-second cache plus 30-second polling bound is 45 seconds, plus request/processing
@@ -137,7 +140,9 @@ $0.03–$0.20 Lambda request/compute charges at the recorded reference rates. Th
 durations are scenarios, not measured AWS runtime. Viewer requests, data transfer,
 logs, storage, retries and backup are excluded; current rates/allowances need
 preflight verification. A visible visitor makes about 120 snapshot checks/hour;
-shared edge caching reduces origin traffic, but does not bound viewer charges.
+shared edge caching reduces origin traffic. ACTIVE FREE coverage includes eligible
+viewer delivery; origin and unrelated AWS costs remain variable. See the
+[coverage and residual-cost assessment](aws-cost-protection.md#hosting-options-and-cost-exposure).
 
 The observed-stock schema is deliberately independent of future forecast records.
 Issue #68 owns prospective measurement, probability semantics, prediction freshness
@@ -167,29 +172,38 @@ See
 
 ## Architecture and publication
 
-A Lambda configured for hourly publication (Python 3.13, runtime boto3, 128 MiB
-x86, 90-second timeout) publishes only `public/data.json`. The EventBridge schedule
-defaults to disabled; activation requires separate authorization. The public
-snapshot contains no scheduler configuration or live schedule status.
+The hourly operations branch of the publisher Lambda (Python 3.13, runtime boto3,
+128 MiB x86, 90-second timeout) publishes only `public/data.json`. The same Lambda
+routes S3 notifications to the separate stock-only publication operation. The
+EventBridge schedule defaults to disabled; activation requires separate
+authorization. The public snapshot contains no scheduler configuration or live schedule status.
 The unversioned private encrypted S3 bucket also holds the static page assets.
-No hourly archive, database, frontend framework,
-new custom metrics, alarms, provider requests, billing API, or visitor AWS calls
-are introduced. An EventBridge rule starts disabled; automatic delivery and
+The operations path introduces no hourly archive, database, frontend framework,
+new custom metrics, alarms, provider requests, billing API, or visitor AWS calls.
+An EventBridge rule starts disabled; automatic delivery and
 asynchronous execution retries are disabled. No reserved concurrency consumes
 the existing low account quota.
 
-CloudFront uses its default domain and pay-as-you-go pricing, PriceClass_100,
-HTTPS-only viewer access, a regional S3 REST origin, and OAC with `always` SigV4
-signing. The bucket blocks public access and allows CloudFront read access only
+The template uses the CloudFront default domain, HTTPS-only viewer access,
+a regional S3 REST origin, and OAC with `always` SigV4 signing. Its existing
+FreePlanCandidate condition selects PriceClass_All in FREE mode and preserves
+historical PriceClass_100 outside that mode. The operator-verified October 31
+state is ACTIVE FREE with disabled delivery; the subscription was created in
+the console, outside CloudFormation. See [verified hosting state](deployment.md#verified-hosting-state-and-ownership).
+The bucket blocks public access and allows CloudFront read access only
 to `public/*` for this exact distribution ARN. TLS is required for all S3 access.
 The origin has no website endpoint or public ACL. No access logs are enabled
-(no additional log storage or visitor information). Security response headers
+(no additional log storage or visitor information). Successful-response security headers
 restrict scripts, styles and requests to the same origin, forbid frames and
-disable MIME sniffing. Only GET/HEAD are served. Cache TTL is normally five minutes,
-with no cookies or query parameters forwarded. No invalidation on hourly updates.
+disable MIME sniffing; origin 4xx/5xx retain the documented
+[compatibility limitation](#cloudfront-free-candidate-compatibility). Only GET/HEAD
+are served. Operations objects use explicit five-minute cache metadata; stock
+objects follow the separate cache contract. No cookies or query parameters are
+forwarded. No invalidation on hourly updates.
 
-Every public field is constructed from a fixed allowlist. Only validated numeric
-telemetry and UTC timestamps from normalized evidence are exposed; AWS responses,
+Every public field is constructed from a fixed allowlist. The operations snapshot
+exposes only validated numeric telemetry and UTC timestamps from normalized
+evidence; AWS responses,
 log messages, identities, UUIDs, ARNs, bucket names, keys, provider records,
 credentials, operator destinations and exception details are never copied.
 Frontend text uses `textContent`, not HTML interpolation. Missing values remain
@@ -342,14 +356,17 @@ publisher requests alone are about $0.0040–$0.0049/month. Recheck Stockholm ra
 and storage class before deployment. Rates were verified in the public regional
 [S3 offer](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonS3/current/eu-north-1/index.json)
 and [Lambda offer](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AWSLambda/current/eu-north-1/index.json)
-on 2026-10-10. Only one ≤192 KiB JSON and five small
-assets are stored; origin reads depend on public traffic and cache misses.
-Collector operation estimates and their skip/retry uncertainty are unchanged;
-see monitoring.md. Log storage/ingestion, S3 storage, API attempts outside remaining
-allowances, and CloudFront traffic add variable costs. Under low traffic and
-available account allowances, the incremental recurring cost should be pennies;
-it cannot be guaranteed or capped by this MVP. No unsupported visitor-volume
-forecast or archive-storage estimate is used.
+on 2026-10-10. The hourly estimates above cover operations publication and its
+one ≤192 KiB JSON and five small static assets. Stock publication adds a separate
+snapshot and the assembled stock page and assets, including retained hashed assets;
+these are outside those hourly estimates. Eligible CloudFront FREE delivery is
+included under ACTIVE coverage. S3 origin reads and writes, Lambda execution,
+storage, log ingestion and unrelated AWS services remain potentially billable,
+subject to actual usage and account allowances. Origin reads depend on traffic
+and cache misses; FREE delivery does not cap these other costs. Collector estimates
+and their skip/retry uncertainty are unchanged; see monitoring.md. These dated
+reference rates are historical assumptions, not a current bill or cost guarantee.
+No visitor-volume forecast or archive-storage estimate is used.
 
 Conditional account-wide references: Lambda 1M requests / 400,000 GB-seconds;
 CloudWatch 10 custom metrics / 10 standard alarm metrics / eligible API requests
@@ -366,6 +383,229 @@ remaining allowances or billing. Rates/terms checked 2026-10-10 against
 Recheck before deployment; estimates are not actual billed amounts.
 
 ## Offline validation and production updates
+
+### CloudFront Free candidate compatibility
+
+The operator-verified **2026-10-31** state is recorded in
+[deployment](deployment.md#verified-hosting-state-and-ownership): ACTIVE console-owned
+FREE subscription, existing WAF, and disabled delivery. The managed
+cache/header policies and viewer-response Function remain correct. The local
+PriceClass now follows the same existing condition. Template defaults still
+serve historical/noncandidate setup; preserve the actual live parameter values
+on any future authorized update rather than applying defaults blindly.
+
+The byte-match WAF path rule was removed locally after the October 30 tier
+rejection and is now verified removed live. Removal loses COUNT-only diagnostics,
+not enforced blocking. The local ACL still defaults to ALLOW and its IP rate
+rule to COUNT; COUNT does not reduce origin requests or residual costs.
+Custom policy resources remain in the template but are unattached in FREE mode.
+Reverting to those incompatible policies or detaching WAF while FREE remains
+active is not an authorized rollback. Subscription creation/import is not needed
+and is not part of recovery. Keep delivery disabled pending the error-response
+security and source-redistribution gates. No collector, publication permissions,
+notification wiring, schedules, bucket policies or operations root change here.
+See [rollback boundary](deployment.md#failure-and-rollback-boundary).
+
+Managed cache TTLs are 1 / 86400 / 31536000 seconds, compared with the historical
+0 / 300 / 3600. Query strings and cookies remain excluded; compressed variants
+remain supported. Explicit origin metadata is mandatory for **every served object**:
+
+| Object | Origin Cache-Control | Expected successful-response edge TTL |
+| --- | --- | --- |
+| `stock.json` | `public,max-age=15` (existing publisher) | 15 seconds |
+| `data.json` | `public,max-age=300` (existing publisher) | 300 seconds |
+| Five operations assets and font license | `public,max-age=300` | 300 seconds |
+| `stock.html` | `public,max-age=0,must-revalidate` | Minimum 1 second; browser revalidates |
+| Hashed stock assets | `public,max-age=31536000,immutable` | Up to one year; retain old hashes |
+
+The packager now emits `stock-site-upload-metadata.json`, keyed by exactly the
+existing upload allowlist, with `CacheControl` and `ContentType` for each static
+object. Apply those as real S3 object properties, not `x-amz-meta-*` user metadata.
+Neither manifest is public content. Existing JSON metadata must be verified
+separately; static packaging does not publish JSON or repair deployed metadata.
+Missing Cache-Control can cache for a day, and an excessive value is no longer
+capped at one hour. Never rely on viewer request `no-cache` or a query suffix to
+bypass CloudFront. The one-second floor also applies to `no-cache`, `no-store`
+and `private`; only explicitly public content belongs behind this behavior.
+[Managed cache settings](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/using-managed-cache-policies.html).
+
+`CachingDisabled` preserves zero caching but increases origin requests.
+`UseOriginCacheControlHeaders` has a zero minimum/default but includes viewer
+Host, other headers and all cookies in the cache key/forwarding; it is not an
+equivalent private S3/OAC replacement. The candidate uses CachingOptimized with
+explicit metadata. No origin request policy or extra cache behavior is added.
+
+The frontend still polls 30 seconds **after completion** of the last request,
+uses relative `stock.json`, retains the last valid snapshot on failure and keeps
+source timestamps distinct. The local cache model exercises replacement phases
+and another viewer refilling an edge: under immediate successful requests,
+15-second edge freshness plus polling gives at most 45 seconds after publication.
+This is a model, not measured CloudFront latency or an acquisition freshness SLA.
+Request duration (up to the existing eight-second timeout), hidden tabs, failed
+requests, edge propagation/revalidation and stale-on-error behavior can extend
+it. Degraded YATA remains stale independently of publication/cache freshness.
+Error caching is separate from object TTL and is unchanged by this candidate.
+
+The managed response policy runs before the viewer-response Function. The Function
+overwrites CSP, framing, referrer policy, HSTS and nosniff with the historical custom
+policy values, while preserving status, body, ETag, cache metadata and cookies.
+It has no logging, network, key-value store or shared distribution association.
+It removes the managed policy's legacy `X-XSS-Protection` addition on invoked
+responses, preserving its absence in the existing policy. Errors still have the
+managed fallback, including that extra header.
+[Policy ordering](https://aws.amazon.com/blogs/networking-and-content-delivery/amazon-cloudfront-introduces-response-headers-policies/),
+[managed headers](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/using-managed-response-headers-policies.html).
+
+| Response path | Candidate security result | Activation status |
+| --- | --- | --- |
+| Origin/cache 2xx, HEAD, 3xx including viewer conditional response | Function restores the five existing header values when invoked | Offline code verified; AWS invocation/order still needs verification |
+| Origin 4xx/5xx, including S3 missing object 403/404 | Viewer-response Function is skipped; managed fallback has no CSP, SAMEORIGIN rather than DENY, and strict-origin-when-cross-origin rather than no-referrer | **Blocking incompatibility** |
+| WAF BLOCK 403 | Generated before normal origin response processing; no equivalent header guarantee; custom WAF responses are unavailable on Free | **Blocking incompatibility before enforcement** |
+| CloudFront-generated HTTP denial, malformed request, edge/Function failure | Not proven to receive the current or candidate policy on every path | Missing live evidence; do not claim universal error coverage |
+
+[AWS's origin error restriction](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/edge-function-restrictions-all.html)
+prevents equivalence with this composition. S3 object user metadata cannot supply
+arbitrary response security headers, and HTML meta CSP cannot replace the full
+header contract. Custom error pages do not establish that the Function will run;
+do not turn errors into 200 responses. Lambda@Edge would add a separately billed
+execution path and does not solve every edge/WAF-generated error; it is outside
+this package. Keep delivery disabled until an independently reviewed, explicitly
+approved bounded difference or an equivalent Free-supported solution resolves the
+gap. Retaining historical custom policy resources does not authorize reattaching
+them to the active FREE distribution. Offline tests model bypass; they do not
+emulate AWS errors.
+
+#### Error security comparison and proposed exception
+
+For origin errors, the historical custom-policy contract overrides all five
+headers. It is the comparison baseline, not the currently associated policy.
+The FREE configuration cannot reproduce that behavior using any managed response
+policy: AWS's published managed policies contain no CSP. Viewer-request Functions
+could generate selected rejection responses with headers, but cannot intercept
+later S3 failures. S3 user metadata is not an arbitrary HTTP security-header
+mechanism. Custom error pages do not remove the origin-error invocation restriction;
+rewriting status to 200 also breaks error semantics. WAF custom responses are not
+included on Free, and Lambda@Edge adds separately billed execution. No complete
+Free-supported equivalent was identified within the existing S3/OAC architecture.
+This conclusion does not establish the behavior of every CloudFront-generated error.
+
+| Header on origin 4xx/5xx | Historical custom-policy contract | FREE fallback without origin security headers | Security significance |
+| --- | --- | --- | --- |
+| CSP | Full existing restrictive CSP including `frame-ancestors 'none'`, `object-src 'none'`, `base-uri 'none'` | Absent | Removes script/resource/base/object restrictions and CSP framing prohibition from the error document. Material loss of defense if an error ever becomes active or attacker-influenced HTML. |
+| X-Frame-Options | DENY | SAMEORIGIN | Still rejects cross-origin framing, but permits same-origin framing. CSP no longer supplies the stricter independent prohibition. |
+| Referrer-Policy | no-referrer | strict-origin-when-cross-origin | May disclose the full referring URL on same-origin requests and the origin on cross-origin HTTPS requests; suppresses HTTPS-to-HTTP downgrade referrers. Broader disclosure than sending none. |
+| HSTS / nosniff | max-age=31536000 / nosniff, forced override | Same expected values; managed HSTS does not override an origin value | No expected reduction for ordinary S3 errors with no supplied HSTS. Verify actual values; an unexpected origin value is outside the proposed exception. |
+| X-XSS-Protection | Not added | `1; mode=block` added by managed policy | Legacy browser behavior differs; no substitute for CSP and no modern XSS protection claim. |
+
+**Proposed exception EX75-ERROR, not approved:** permit only the table's missing
+CSP, SAMEORIGIN, strict-origin-when-cross-origin and additional legacy XSS header
+on genuine origin 4xx/5xx and observed default WAF BLOCK 403 error documents of
+this one distribution. Preserve actual HTTP error status. Successful content,
+GET/HEAD, redirects and conditional responses when the Function runs retain the
+existing five values and absence of the legacy XSS header. HSTS/nosniff must
+remain unchanged. Do not generalize acceptance to arbitrary edge/Function errors.
+
+Before any candidate delivery, the owner must approve this exact proposed matrix
+and explicitly authorize a bounded verification-only window after ACTIVE Free
+coverage. This is a security decision for testing, not production acceptance.
+For final acceptance, compare retained historical header evidence where available
+and the configured baseline with fresh FREE-response headers, Content-Type and
+sanitized bodies for missing-object 403/404 and available safe
+5xx cases; inspect a default WAF block separately; confirm error bodies have no
+active content, executable reflection, sensitive URLs, credentials or private
+evidence; and confirm paths still use private OAC/public-only content. Error
+format changes, active/custom HTML error pages, any weaker HSTS/nosniff, sensitive
+URL parameters or an unclassified response path invalidate the exception and
+require delivery disabled plus renewed review. If a safe 5xx cannot be observed,
+that portion remains unverified and is not covered by a blanket approval.
+Record the approved status/body/header matrix and distribution identity explicitly.
+If candidate response captures require the verification window, identify those
+missing captures in the provisional decision first; disable delivery again at
+the window's end unless all required evidence and final owner acceptance exist.
+Without that owner decision, retain the existing FREE-compatible configuration
+and keep public delivery disabled. Do not revert the enabled candidate parameter
+or reattach incompatible custom policies. No exception has been accepted by this
+implementation.
+
+#### Deterministic origin metadata delivery
+
+`python -m tools.plan_public_metadata` is a local dry-run planner with **no S3
+client or write mode**. Supply the assembled directory and a private JSON inventory
+with `bucket`, `prefix: "public/"`, `complete: true`, and `objects` containing
+`Key`, opaque quoted `ETag`, `Size`, `CacheControl` and `ContentType` from S3.
+The inventory must include every page of a `public/` listing and HEAD results
+for every object, captured only after later read authorization. Offline validation
+cannot prove that `complete` is truthful. Stop publishers during capture/application
+to avoid inventory races; never stop or modify the collector. Both public JSON
+objects must exist; missing snapshots are an activation blocker, never invented.
+
+The planner reads both generated manifests, validates exact matching key sets and
+cache/MIME values, hashes every assembled file and emits operations in sorted-key
+order. Assembled files get conditional PUT plans; existing objects require IfMatch,
+new objects IfNoneMatch `*`. Existing public JSON and retained hashed assets get
+repair or verification plans. Every existing object must be a known operations
+file, `stock.html`, one of the two JSONs, the font license, or a flat hashed
+stock asset with an approved extension explicitly listed in the current or a
+reviewed retained-release metadata manifest. Filename shape alone is insufficient.
+Pass prior reviewed release metadata using repeatable `--retained-manifest` options;
+do not construct an allowlist from unknown inventory names solely to bypass rejection.
+Unknown keys, private paths, folder markers, encoded/nested/traversal names,
+unhashed assets, duplicates, modified
+manifest values and either manifest as public content fail closed. Existing legacy
+assets outside this contract require explicit inventory review; do not silently
+delete, exclude or block assets still referenced by cached pages.
+
+Example local invocation, with separately captured inventory; this performs no
+cloud operation and writes the plan outside the assembled upload directory:
+
+```powershell
+. ./.chatgpt/powershell-helpers.ps1
+Invoke-NativeCommand python @('-m', 'tools.plan_public_metadata', '--directory', '.aws-sam/stock-site', '--inventory', '.aws-sam/public-inventory.json', '--retained-manifest', '.aws-sam/retained-release-metadata.json', '--output', '.aws-sam/public-metadata-plan.json')
+```
+
+Review the plan's exact bucket, complete expected key set, source SHA-256/size,
+opaque ETags, actions and PUT `CacheControl`/`ContentType` before authorizing any
+application. The planner is **preparation**, not an upload executor. Authorized
+application must follow this contract:
+
+1. Keep delivery disabled. Pause only public-writing triggers/invocations, wait
+   for in-flight publisher writes, capture schedules/notifications and refresh
+   inventory. Confirm the bucket is the private hosting bucket and current key
+   set equals inventory. Do not use bucket sync, deletion or a recursive upload.
+2. Rehash local sources against the plan. For every existing write, GET using
+   IfMatch, verify ETag/size and save body SHA-256; capture object tags under the
+   writer pause. For byte-preserving metadata repairs, preserve user Metadata,
+   Content-Encoding, Content-Disposition, Content-Language, Expires, object tags,
+   storage class and encryption properties while replacing **only** Cache-Control
+   and Content-Type. For assembled uploads, representation headers must describe
+   the reviewed local bytes: do not inherit an old Content-Encoding that describes
+   a different body. Reconcile differing properties explicitly before execution;
+   the manifest specifies CacheControl and ContentType, not every object property.
+   If an unexpected encryption, retention/lock, versioning or other property
+   cannot be preserved,
+   stop for review. Do not guess defaults or publish private metadata. Metadata
+   repair writes back the exact fetched bytes; an assembled upload uses its
+   reviewed local bytes. Use conditional PUT, not an unconditional self-copy that
+   could overwrite a newer JSON. Permissions/tags and conditional failure handling
+   must be reviewed before execution; no executor is supplied here.
+3. Apply only the plan's per-key conditional requests. Any 412, missing object,
+   size/hash mismatch, changed key set or uncertain write stops the entire run.
+   Read back the uncertain key and reconcile receipts; never retry unconditionally.
+   Retain the partial-operation journal and original properties/bodies privately
+   for recovery. No canonical evidence or source data is written.
+4. Post-upload, list every `public/` page again and HEAD every expected key.
+   Require exact key-set equality with inventory union assembled keys, exact
+   planned Cache-Control/Content-Type, preserved properties/tags or explicitly
+   reviewed upload differences, and correct sizes. GET changed keys: require assembled SHA-256 or the pre-repair
+   body SHA-256 respectively. ETag is a concurrency token, not a content digest.
+   Confirm no manifest was published. Reinventory and verify resumed publisher
+   output still uses the existing 15/300-second JSON metadata. Do not enable
+   CloudFront until these checks and the separate Free/security gates pass.
+
+This covers retained old hashes as well as newly assembled files. It does not
+prove live metadata delivery, change publisher metadata, or repair cache entries
+already held at edge/browser caches. Later verification must account for previous
+TTL expiry or a separately authorized bounded invalidation.
 
 For frontend-only work, run `node tests/test_dashboard_frontend.cjs` and
 `git diff --check`; publisher packaging, SAM and unrelated cloud checks are not
@@ -418,7 +658,35 @@ npm --prefix frontend test
 npm --prefix frontend run build
 python -m tools.package_stock_frontend
 sam validate --lint --template-file dashboard-template.json --region eu-north-1
+sam validate --lint --template-file cloudfront-waf-template.json --region us-east-1
+node tests/test_cloudfront_headers.cjs
 git diff --check
+```
+
+Historical validation on **2026-10-29**: isolated cfn-lint 1.59.0 passed the
+dashboard, WAF and then-proposed subscription template. The subscription also
+passed with the published `us-east-1` provider schema (Last-Modified
+2026-10-29 19:29:18 UTC; SHA-256
+`c638c50992e98eb0047ec99ce400d806ed3735c8adb203f8a71f0d3ec914c324`).
+An invalid PlanFamily negative control failed E3030 as expected; bundled SAM
+subscription lint failed E3006 without suppression. These are dated local
+validation results, not evidence that CloudFormation created the subscription.
+
+As of **2026-10-31**, the subscription exists outside CloudFormation and its
+unused uncommitted creation template and exclusive test have been removed.
+No runtime or recovery code depended on that file. Do not recreate or import the
+console subscription. Prior schema/creation validation does not add a current
+registry/import requirement or block reconciliation of the remaining templates.
+The private earlier review bundles remain historical evidence, not deployment
+packages for the active console-owned subscription.
+
+For the remaining templates, the existing isolated local validator can be used
+offline; no subscription template, schema download or AWS call is required:
+
+```powershell
+. ./.chatgpt/powershell-helpers.ps1
+Invoke-NativeCommand .aws-sam/cfn-lint-venv/Scripts/cfn-lint.exe @('-t', 'dashboard-template.json', '-r', 'eu-north-1')
+Invoke-NativeCommand .aws-sam/cfn-lint-venv/Scripts/cfn-lint.exe @('-t', 'cloudfront-waf-template.json', '-r', 'us-east-1')
 ```
 
 The generated `.aws-sam/dashboard-publisher.zip` contains `dashboard_publisher.py`,
@@ -440,8 +708,9 @@ and scheduling before preparing a change set. Do not update the collector stack.
 Use the assembled `.aws-sam/stock-site/` output, not raw source, for a reviewed
 frontend release. Its generated `stock-site-files.json` lists the operations files,
 `stock.html` and external hashed `stock-assets/` files (including font/license).
-Upload only those listed paths to corresponding `public/` keys, with correct MIME
-types. Retain five-minute caching for operations assets; revalidate the stock HTML
+Upload only those listed paths to corresponding `public/` keys, applying the generated
+upload metadata as object properties. Do not upload either manifest.
+Retain five-minute caching for operations assets; revalidate the stock HTML
 and use immutable caching for hashed stock assets. Retain older hashed assets for
 cached HTML references. Do not upload the manifest or any preview JSON/evidence. Do not upload
 repository source or evidence. Verify all four direct routes, navigation,
@@ -453,10 +722,14 @@ Offline frontend checks do not establish deployed revision, live permissions,
 telemetry availability, caching or provider behavior. Those need separately
 authorized verification; no deployment state is inferred from local files.
 
-If publication stops, retain the previous JSON and show stale publication after
-two hours. Operators use private publisher logs and existing Lambda metrics;
-there are no additional alarms. Disable only the dashboard hourly rule to pause
-publication. The retained hosting bucket needs separate intentional cleanup if
+If operations publication stops, retain the previous `data.json` and show stale
+publication after two hours. The stock page has its separate two-minute update-age
+cue. Operators use private publisher logs and existing Lambda metrics; there are
+no additional alarms. Disabling the dashboard hourly rule pauses only operations
+publication; stock notifications are independent. Follow the
+[stock publication pause procedure](deployment.md#stock-publication-activation-boundary)
+and the writer pause contract above when quiescing public writes. The retained
+hosting bucket needs separate intentional cleanup if
 the stack is removed; never clean up the evidence bucket. Traffic can incur costs
 even when publication is paused. Independent security/infrastructure review is
 required before production deployment.

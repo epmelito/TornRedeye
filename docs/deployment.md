@@ -80,7 +80,9 @@ wiring. Independently review these minimum changes before any cloud operation:
    preserve all existing bucket notifications. Do not add a publisher call to
    collector persistence or run hourly monitoring every minute. Notification and
    permission wiring is deliberately absent from the local templates pending review.
-5. Confirm CloudFront's zero minimum TTL and stock response `max-age=15`, plus
+5. Verify the FREE managed cache policy's one-second minimum and the explicit
+   stock response `max-age=15` against the
+   [cache contract](dashboard.md#cloudfront-free-candidate-compatibility), plus
    routes, content types, conditional publication, concurrent events and live
    publication-to-display delay. Do not infer deployed configuration from local
    templates. Existing asynchronous retry settings and delivery semantics need
@@ -100,6 +102,145 @@ route; retain the last public snapshot so browsers show its age. Do not pause
 collection or the operations schedule. Restore assets/function code only through
 a separately approved deployment. No production or forecasting activation is
 authorized by this local implementation.
+
+## CloudFront Free activation boundary
+
+### Verified hosting state and ownership
+
+**Operator-verified state supplied 2026-10-31**, not a new AWS inspection by this
+local implementation, in workload account `940521993273`:
+
+- Exactly one matching CloudFront **FREE** subscription is **ACTIVE**, created
+  through the AWS console, outside CloudFormation, and includes the existing
+  distribution and WAF. No scheduled subscription change was reported.
+- Distribution `E30SMD8RRAENEI` is **Deployed and disabled**, with live
+  `PriceClass_All`. The dashboard stack has `FreePlanCandidate=ENABLED` and
+  `DistributionEnabled=false`.
+- The existing WAF association, managed cache policy, managed response-header
+  policy and viewer-response Function remain correct. The WAF byte-match rule
+  was successfully removed. The ACL has only `SourceIpRate`, in COUNT at 3000
+  requests per IP over 300 seconds, with default ALLOW.
+
+The subscription is console-owned. No local runtime or recovery code depends on
+its former uncommitted creation template, which has been removed along with its
+exclusive test. **Do not create or import another subscription.** A dashboard
+stack update, rollback or deletion does not manage this subscription's lifecycle.
+Issue #75 remains open; this reconciliation authorizes no AWS operation.
+
+The dashboard stack continues to own the distribution and its associations.
+`dashboard-template.json` now selects `PriceClass_All` through the existing
+`UseFreePlanCandidate` condition; noncandidate mode preserves the historical
+`PriceClass_100`. The managed policy IDs and Function association are unchanged.
+Custom cache/security policy resources remain in the template but are unattached
+in FREE mode. They are historical compatibility resources, **not an authorized
+rollback target while FREE is active**.
+
+`cloudfront-waf-template.json` still describes only the dedicated CLOUDFRONT ACL
+in `us-east-1`, default ALLOW, with the native source-IP rule defaulting to COUNT
+at 3000 requests per 300 seconds. Its creation default remains disabled. The
+existing ACL was confirmed to belong to the deployed `tornredeye-cloudfront-waf`
+stack in `us-east-1`; its successful update and current single COUNT rate rule
+were independently verified. Do not create a second ACL or infer deployed state
+from template defaults; require fresh verification before future operations.
+
+### Historical context and remaining gates
+
+The **2026-10-29** operator baseline had enabled delivery, no WAF/Functions and
+an SCP denial of CreateSubscription. Those dated observations do not describe
+the current verified hosting state or establish current IAM/SCP permissions.
+On **2026-10-30**, the operator reported the console rejection "configuration not
+available in this tier: byte match". The local UnexpectedPublicPath proposal and
+its exclusive controls were removed. That lost COUNT-only path diagnostics,
+not enforced blocking. Successful live removal is now part of the October 31
+verification. No replacement Function, service or path filter is proposed.
+
+An ACTIVE plan does **not** resolve the
+[error-response security incompatibility](dashboard.md#error-security-comparison-and-proposed-exception)
+or the [source redistribution/attribution gate](#stock-publication-activation-boundary).
+Both remain outstanding before public delivery. The exception proposal is not
+owner acceptance, and correct Function association does not prove error-header
+equivalence. Preserve private S3/OAC, `/public`, the operations `index.html` root,
+collector independence and existing public publication contracts.
+
+COUNT observes rate matches; it does not block requests or reduce S3 misses.
+Random paths and real objects requested across edges/variants still expose
+variable origin request costs. Per-IP BLOCK remains a separate decision requiring
+an approved NAT/mobile/multiple-tab baseline and threshold plus WAF-error security
+acceptance. Distributed traffic can bypass a per-IP bound. Schema lint does not
+prove plan acceptance, as the earlier byte-match rejection demonstrated.
+
+### Further verification and delivery require separate authorization
+
+There is no prospective subscription-creation or WAF-provisioning step for the
+current state. No CreateSubscription permission expansion, subscription import,
+paid tier, cancellation or account upgrade is part of this reconciliation.
+Later cloud reads/writes need their own authorization and effective permissions.
+
+1. Keep the existing distribution disabled and retain ACTIVE FREE coverage and
+   the associated ACL. Under later read authorization, capture current templates,
+   physical resource IDs, subscription identity/resources/status and any scheduled
+   change, distribution config/ETag, parameters, schedules and public metadata.
+   The ACTIVE FREE subscription ARN was supplied in the operator's earlier AWS
+   CLI evidence. Verify the current identity and state afresh before future
+   operations rather than hardcoding mutable IDs or relying on this snapshot forever.
+2. Review any eventual dashboard update against the existing stack and preserve
+   actual parameters: `FreePlanCandidate=ENABLED`, `DistributionEnabled=false`,
+   the current `WebAclArn`, and the real schedule state. Template defaults are
+   not deployment instructions. FREE mode selects PriceClass_All; never apply
+   historical PriceClass_100 or incompatible custom policies to this active plan.
+   The live PriceClass already matches the corrected branch of the local template.
+3. Complete the [metadata dry-run and readback contract](dashboard.md#deterministic-origin-metadata-delivery)
+   for existing/new public objects and retained assets, with public writers paused
+   only under separate authority. Do not modify collection, add source requests,
+   enable notification wiring or publish synthetic evidence. Missing JSON, unknown
+   keys, absent retained-release manifests or metadata mismatches remain blockers.
+4. Resolve redistribution/attribution and the exact error-response security
+   decision, then obtain explicit authorization for a **15-minute verification-only
+   delivery window**. Reconfirm ACTIVE FREE, the associated ACL, compatible policies,
+   Function and deployed configuration before any enablement. Keep COUNT initially.
+   Verify operations/stock routes, GET/HEAD, conditional/compressed responses,
+   cold/warm cache headers, private-origin denial and safely observable error cases.
+   Record status, headers, Content-Type and sanitized error bodies; do not inject
+   faults into collector/evidence services. Missing safe 5xx evidence stays explicit.
+5. Measure publication-to-display delay using genuine, separately authorized
+   publication receipts without new YATA calls. Degraded/frozen source evidence
+   does not prove new source freshness. Do not substitute a synthetic snapshot.
+   At the end of the window, disable delivery again unless required evidence and
+   explicit final owner acceptance authorize continued public operation.
+6. Review actual native metrics and an approved request budget before any separate
+   rate BLOCK change. Do not flood production merely to exceed 3000 requests.
+   If verification fails, keep delivery disabled with the ACTIVE subscription and
+   WAF association intact. Never silently restore pay-as-you-go public delivery.
+
+### Failure and rollback boundary
+
+- The verified safe holding state is **disabled delivery with ACTIVE FREE and
+  its existing WAF association**. Preserve the managed policies, Function and
+  PriceClass_All. Reverting `FreePlanCandidate` to DISABLED, restoring incompatible
+  custom policies/PriceClass_100, clearing WebAclArn or detaching/deleting the ACL
+  while FREE is active is not an authorized rollback.
+- A future approved update may roll back only to a captured, FREE-compatible
+  disabled configuration. Inspect change-set and rollback effects on enabled
+  state, associations and parameters before execution. If rollback restores
+  delivery or incompatible settings, stop and escalate to the owner for explicit
+  recovery authority. Do not use older pre-FREE defaults as a recovery shortcut.
+- Stack success/failure is not subscription lifecycle evidence. The existing
+  console-created subscription is outside CloudFormation and must not be
+  recreated, imported or assumed cancelled because a stack rolled back.
+- On ambiguous operations or failed rollback, keep delivery disabled, preserve
+  coverage, capture exact resource/event state and reconcile ownership under
+  recovery authority. Do not launch replacement resources, blindly skip failed
+  resources or delete an ambiguously owned ACL. No automatic cleanup timer exists.
+- Cancellation or a return to pay-as-you-go would require a separately approved
+  transition with effective cancellation/recovery authority, verified disabled
+  delivery, actual cancellation-state checks, origin-cost acceptance and explicit
+  ACL cleanup ownership. This procedure does **not** authorize that transition.
+  Disabling delivery alone does not cancel a plan or eliminate all AWS charges.
+
+No step changes collection, forecasting, evidence retention, schedules or public
+publication permissions. The former pre-subscription 30-minute WAF bridge window
+is historical planning, not a current activation step or hard cost cap. See
+[remaining costs](aws-cost-protection.md#target-compatibility-and-security-gates).
 
 ## Offline validation
 

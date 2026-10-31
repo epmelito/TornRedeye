@@ -1,5 +1,6 @@
 """The static React stock build must coexist with the existing operations routes."""
 from pathlib import Path
+import json
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -34,6 +35,16 @@ class StockPackagingTests(unittest.TestCase):
             self.assertFalse((result / "stock.js").exists())
             self.assertIn("./stock-assets/", (result / "stock.html").read_text())
             self.assertTrue((result / "stock-assets" / "FONT-LICENSE.txt").is_file())
+            files = json.loads((result / "stock-site-files.json").read_text())
+            metadata = json.loads((result / "stock-site-upload-metadata.json").read_text())
+            self.assertEqual(set(metadata), set(files))
+            for name in stock.OPERATIONS + ("stock-assets/FONT-LICENSE.txt",):
+                self.assertEqual(metadata[name]["CacheControl"], "public,max-age=300")
+            self.assertEqual(metadata["stock.html"]["CacheControl"], "public,max-age=0,must-revalidate")
+            self.assertEqual(metadata["stock-assets/app.js"]["CacheControl"], "public,max-age=31536000,immutable")
+            self.assertEqual(metadata["stock-assets/app.css"]["ContentType"], "text/css; charset=utf-8")
+            self.assertNotIn("stock.json", metadata)
+            self.assertNotIn("stock-site-upload-metadata.json", files)
 
     def test_missing_build_fails_without_inventing_a_page(self):
         with tempfile.TemporaryDirectory() as temp:

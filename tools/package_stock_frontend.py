@@ -34,6 +34,19 @@ def package(destination=ROOT / ".aws-sam" / "stock-site"):
     shutil.copyfile(ROOT / "frontend" / "src" / "fonts" / "OFL.txt", license_path)
     files["stock-assets/FONT-LICENSE.txt"] = license_path
     (destination / "stock-site-files.json").write_text(json.dumps(sorted(files), indent=2) + "\n")
+    # explicit origin metadata prevents the managed policy's one-day fallback
+    metadata = {}
+    content_types = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
+                     ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml",
+                     ".ttf": "font/ttf", ".woff2": "font/woff2", ".txt": "text/plain; charset=utf-8"}
+    for name in sorted(files):
+        cache = "public,max-age=300"
+        if name == "stock.html":
+            cache = "public,max-age=0,must-revalidate"
+        elif name.startswith("stock-assets/") and name != "stock-assets/FONT-LICENSE.txt":
+            cache = "public,max-age=31536000,immutable"
+        metadata[name] = {"CacheControl": cache, "ContentType": content_types[Path(name).suffix]}
+    (destination / "stock-site-upload-metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
     return destination
 
 

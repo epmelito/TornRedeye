@@ -15,7 +15,8 @@ TornRedeye collects stock observations into private evidence storage, with
 independent monitoring, backup, reporting and experimental forecasting components.
 The diagram shows implemented software components and their data flows; it does
 not indicate which production schedules are currently enabled. Deployment and
-operation are described in the [deployment guide](docs/deployment.md).
+operation are described in the [deployment guide](docs/deployment.md). Public
+delivery remains disabled pending the [activation gates](docs/deployment.md#cloudfront-free-activation-boundary).
 
 ```mermaid
 flowchart TD
@@ -65,7 +66,8 @@ backups verify uploaded archives and payload hashes by reading them back.
 | CloudWatch and SNS | Monitor collection through logs, metrics and alarms, and route notifications to configured, confirmed subscriptions. |
 | GitHub Actions | Run verified daily backups with short-lived AWS/Azure access through OpenID Connect (OIDC). |
 | Azure Blob Storage | Keep independent evidence and immutable forecast backups, including archives and integrity records. |
-| Amazon CloudFront | Deliver static operations and player stock pages over HTTPS from a private S3 origin. |
+| Amazon CloudFront and CloudFront Functions | Deliver static operations and player stock pages over HTTPS from a private S3 origin; apply managed policies and the viewer-response security Function in FREE mode. |
+| AWS WAF | Associate the dedicated ACL with CloudFront; the initial COUNT rate rule observes traffic without blocking it. |
 | React, TypeScript and Vite | Build the player stock interface as static assets; operations pages retain their existing frontend. |
 | AWS SAM / CloudFormation | Define cloud resources and permissions as reviewable templates; deployment and schedule activation remain separate actions. |
 
@@ -143,6 +145,7 @@ and need no additional framework. Frontend dependencies and builds are scoped to
 - [Offline availability baseline](docs/availability-forecast.md)
 - [Private shadow forecasting](docs/shadow-forecast.md)
 - [Deployment and operation](docs/deployment.md)
+- [Dated AWS cost assessment and hosting constraints](docs/aws-cost-protection.md)
 - [Monitoring and resource use](docs/monitoring.md)
 - [Backup, verification and recovery](docs/evidence-backup.md)
 - [Public operations dashboard](docs/dashboard.md)

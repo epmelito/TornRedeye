@@ -180,6 +180,7 @@ class PublisherTests(unittest.TestCase):
                 self.assertTrue(publisher.publish(client, "bucket", s))
                 written = client.put_object.call_args.kwargs
                 self.assertEqual(written["IfNoneMatch"], "*")
+                self.assertEqual(written["CacheControl"], "public,max-age=300")
                 self.assertNotIn("IfMatch", written)
                 self.assertEqual(json.loads(written["Body"]), s)
                 client.put_object.assert_called_once()
