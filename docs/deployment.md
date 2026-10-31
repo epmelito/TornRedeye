@@ -135,22 +135,24 @@ local code is deployed. CloudFront FREE remains active with delivery disabled.
    that check or insert a preview fixture. After bootstrap, pause only public
    writers under separate authority, wait for in-flight work and capture fresh
    inventory. Keep the operations hourly rule DISABLED throughout this metadata
-   window; do not enable it. Apply the existing reviewed metadata
-   and conditional-write/readback contract to the assembled stock page/assets and
-   existing public objects; neither manifest nor preview JSON is public content.
-   Retain older hashed assets and their reviewed release metadata. Keep
-   `index.html` as the operations root. Changing it to Stock is a separate decision.
+   window; do not enable it. The owner-approved release uploads only the seven
+   stock-specific static files from the current 12-file assembly: `stock.html`
+   and six allowlisted `stock-assets/` files (including font/license). The five
+   assembled operations files are preview input, not deployment targets. Apply
+   the conditional-write and readback contract only to stock static writes;
+   retain older hashed assets and their reviewed release metadata. Neither
+   manifest nor preview JSON is public content.
 
-   The operator reports an existing `public/app.js` Content-Type mismatch; the
-   manifest expects `text/javascript; charset=utf-8`. Capture its actual type,
-   ETag, body hash and other properties. Compare **all five** deployed operations
-   files with assembled bytes before applying the plan: the planner emits upload
-   actions for them, not metadata-only repairs. Do not silently replace deployed
-   operations code with local files. Where bytes match, an explicitly approved
-   conditional metadata repair must retain those exact bytes and other required
-   properties. Where bytes differ, stop that application for review of the
-   operations revision/repair choice; a stock release does not authorize it.
-   Reconcile the app.js mismatch and read back correct metadata before delivery.
+   Preserve all six existing operations objects unchanged: the five static files
+   and `public/data.json`, including their bodies, metadata and current `app.js`
+   Content-Type. Its reported mismatch is not a stock-release repair prerequisite.
+   The planner records operations files and both JSON objects as `preserve` with
+   no write request, even when existing metadata differs from the stock manifest.
+   It does not recreate missing operations files. The separately published genuine
+   `stock.json` must exist, but the static release must not upload or overwrite
+   either JSON. Verify preserved object properties against the captured inventory,
+   not the assembly's operations metadata. Keep `index.html` as the operations
+   root; changing it to Stock remains a separate decision.
 6. Only after package, bootstrap and metadata verification, separately authorize
    the notification merge below. Keep the operations hourly rule DISABLED.
    Notification registration may cause a test
@@ -227,8 +229,9 @@ merged result. Stop operator replays and account for queued/in-flight async work
 and ambiguous writes before removing stock permissions or restoring older code.
 Disabling the hourly rule alone does not stop S3-triggered invocations. Retain the
 last valid stock JSON and prior static assets; do not erase evidence or force old
-JSON over newer publication. If static changes need reversal, restore only the
-reviewed prior bodies/properties conditionally while public writers are paused.
+JSON over newer publication. If stock static changes need reversal, restore only
+the reviewed prior stock bodies/properties conditionally while public writers are
+paused. The six operations objects remain untouched, including their metadata.
 
 Only after the route is absent and pending work reconciled may a separately
 approved dashboard rollback remove `StockPublicationPermission`, the stock-only
@@ -332,7 +335,8 @@ Later cloud reads/writes need their own authorization and effective permissions.
    for existing/new public objects and retained assets, with public writers paused
    only under separate authority. Do not modify collection, add source requests,
    enable notification wiring or publish synthetic evidence. Missing JSON, unknown
-   keys, absent retained-release manifests or metadata mismatches remain blockers.
+   keys, absent retained-release manifests or stock-write metadata mismatches remain
+   blockers. Preserved operations metadata differences do not require repair.
 4. Preserve the accepted free, non-monetized website and visible YATA attribution
    conditions, resolve the exact error-response security decision, then obtain
    explicit authorization for a **15-minute verification-only
